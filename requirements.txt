@@ -1,0 +1,11 @@
+torch>=2.0
+torchvision>=0.15
+numpy>=1.24
+matplotlib>=3.7
+gymnasium[box2d]>=0.29
+cma>=3.3
+rich>=13.0
+tqdm>=4.65
+pillow>=10.0
+plotly>=5.0
+scikit-learn>=1.3   # for PCA in latent_space viz (optional)

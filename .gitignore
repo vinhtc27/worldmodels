@@ -1,0 +1,37 @@
+# Virtual environment
+venv/
+
+# Generated data
+data/rollouts/
+
+# Checkpoints
+checkpoints/
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Outputs
+*.gif
+*.png
+*.mp4
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/
