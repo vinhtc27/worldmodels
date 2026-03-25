@@ -1,5 +1,14 @@
 """
 PyTorch Dataset wrappers for VAE and RNN training.
+
+Two paths for RNN training:
+  1. LatentSequenceDataset (recommended) — reads pre-encoded *_encoded.npz files
+     produced by encode_and_save_rollouts after VAE training. VAE inference
+     runs once up front, so each RNN training step is much faster.
+
+  2. SequenceDataset — reads raw rollout .npz files and stores raw frames.
+     The VAE would need to encode on the fly during RNN training, which is
+     slow. Included for completeness but not used in the standard pipeline.
 """
 import numpy as np
 import torch
@@ -9,7 +18,10 @@ from typing import List
 
 
 class FrameDataset(Dataset):
-    """Flat dataset of individual frames for VAE training."""
+    """
+    Flat dataset of individual frames for VAE training.
+    Loads all rollouts into memory, converts HWC → CHW.
+    """
     def __init__(self, rollout_paths: List[str]):
         self.frames = []
         for p in rollout_paths:
@@ -21,68 +33,75 @@ class FrameDataset(Dataset):
         return len(self.frames)
 
     def __getitem__(self, idx):
-        # Convert HWC → CHW, already float32 [0,1]
+        # Convert HWC → CHW; frames are already float32 in [0, 1]
         frame = self.frames[idx].transpose(2, 0, 1)
         return torch.from_numpy(frame)
 
 
 class SequenceDataset(Dataset):
     """
-    Dataset of (obs_seq, action_seq) windows for RNN training.
-    Each item: obs [T+1, C, H, W], actions [T, A]
-    The VAE encodes obs → z on the fly during training, so we store raw frames.
-    Or: pre-encode and store z to speed up RNN training (recommended).
+    Windowed (obs, action) sequences from raw rollouts for RNN training.
+
+    NOTE: this class is not used in the standard pipeline — prefer
+    LatentSequenceDataset which reads pre-encoded z sequences and is
+    significantly faster because VAE inference runs once up front.
     """
-    def __init__(self, rollout_paths: List[str], seq_len: int, preencoded: bool = False):
+    def __init__(self, rollout_paths: List[str], seq_len: int):
         self.seq_len = seq_len
-        self.preencoded = preencoded
         self.windows = []
 
         for p in rollout_paths:
-            d = np.load(p)
-            obs = d["obs"]    # [T, H, W, C]  or  [T, latent] if preencoded
+            d    = np.load(p)
+            obs  = d["obs"]      # [T, H, W, C]
             acts = d["actions"]  # [T, A]
-            T = len(acts)
+            T    = len(acts)
+            # Stride by seq_len//2 for 50% overlap between windows
             for start in range(0, T - seq_len - 1, seq_len // 2):
                 end = start + seq_len + 1
                 if end > T:
                     break
-                o_window = obs[start:end]    # [seq+1, ...]
-                a_window = acts[start:end]   # [seq+1, A]
-                self.windows.append((o_window, a_window))
+                self.windows.append((obs[start:end], acts[start:end]))
 
     def __len__(self):
         return len(self.windows)
 
     def __getitem__(self, idx):
         obs, acts = self.windows[idx]
-        if not self.preencoded:
-            # HWC → CHW
-            obs = obs.transpose(0, 3, 1, 2)
-        obs_t = torch.from_numpy(obs.astype(np.float32))
-        acts_t = torch.from_numpy(acts.astype(np.float32))
-        return obs_t, acts_t
+        obs = obs.transpose(0, 3, 1, 2)  # [T+1, H, W, C] → [T+1, C, H, W]
+        return (
+            torch.from_numpy(obs.astype(np.float32)),
+            torch.from_numpy(acts.astype(np.float32)),
+        )
 
 
 class LatentSequenceDataset(Dataset):
     """
-    Dataset where frames are pre-encoded to latent vectors.
-    Much faster RNN training — encode rollouts once, then train RNN on z's.
+    Windowed (z, action) sequences from pre-encoded rollouts.
+
+    Reads *_encoded.npz files produced by encode_and_save_rollouts.
+    Each item is a (seq_len+1) window:
+      z_seq   [T+1, latent_dim]  — latent vectors
+      act_seq [T+1, action_dim]  — actions taken
+
+    During RNN training the loader slices these as:
+      z_in   = z_seq[:T]    (input)
+      z_next = z_seq[1:]    (target — what the RNN must predict)
+      a_in   = act_seq[:T]  (action that caused the transition)
     """
     def __init__(self, encoded_paths: List[str], seq_len: int):
         self.seq_len = seq_len
         self.windows = []
 
         for p in encoded_paths:
-            d = np.load(p)
-            z_seq = d["z"]       # [T, latent_dim]
-            acts = d["actions"]  # [T, A]
-            T = len(acts)
+            d    = np.load(p)
+            z    = d["z"]        # [T, latent_dim]
+            acts = d["actions"]  # [T, action_dim]
+            T    = len(acts)
             for start in range(0, T - seq_len - 1, seq_len // 2):
                 end = start + seq_len + 1
                 if end > T:
                     break
-                self.windows.append((z_seq[start:end], acts[start:end]))
+                self.windows.append((z[start:end], acts[start:end]))
 
     def __len__(self):
         return len(self.windows)

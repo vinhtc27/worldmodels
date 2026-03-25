@@ -43,3 +43,17 @@ collect  →  train-vae  →  (auto-encodes rollouts)  →  train-rnn  →  trai
 - train-vae automatically encodes all rollouts to z after finishing
 - train-rnn reads `*_encoded.npz` files, fails if VAE hasn't run yet
 - train-ctrl evaluates in real env, does NOT use rollout data
+
+## Known gotchas
+
+1. **Controller outputs must all use tanh, not sigmoid for gas/brake.**
+   Symptom: front wheels visibly steer right but the car goes straight.
+   Root cause: CarRacing's Box2D physics gives each tire a fixed friction budget. Any brake input —
+   even brake=0.176 — consumes that budget for longitudinal force, leaving zero lateral grip for
+   steering. Verified: `STEER=0.675 GAS=0.758 BRAKE=0.0` → car turns; `STEER=0.675 GAS=0.758 BRAKE=0.176` → car goes straight.
+   Why sigmoid causes this: sigmoid(0)=0.5, so random CMA-ES init immediately produces gas≈0.5 and
+   brake≈0.5 on every step. The controller never learns to release the brake because pushing brake to
+   near 0 requires very negative weights, which 5–50 generations never discovers.
+   Fix: use tanh for all 3 outputs (as in the paper). tanh(0)=0 so init is gas=0, brake=0 — neutral
+   start. Negative tanh outputs are clipped to 0 by the env. CMA-ES only needs to learn to push gas
+   positive, which it finds quickly. Changing this activation requires retraining from scratch.

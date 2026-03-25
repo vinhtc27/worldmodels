@@ -6,11 +6,10 @@ import numpy as np
 import torch
 import gymnasium as gym
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 
 from rich.console import Console
 from rich.table import Table
-from rich.progress import track
 
 from models import VAE, MDNRNN, Controller
 from data import preprocess_frame
@@ -19,46 +18,54 @@ from utils import load_checkpoint
 console = Console()
 
 
-def _run_display(env, vae, rnn, ctrl, cfg, device, debug_action=None) -> Dict:
-    """
-    Run one episode with a custom pygame window:
-      - Centered on the car (rgb_array crop, not the zoomed-out track view)
-      - Resizable via window_width/window_height in cfg.env
-      - Close with window X button, ESC, or Ctrl-C — no kill needed
-    Returns episode metrics.
-    """
-    import pygame
+def run_episode(
+    vae: VAE,
+    rnn: MDNRNN,
+    ctrl: Controller,
+    cfg,
+    device: str,
+    render: bool = False,
+    seed: Optional[int] = None,
+    debug_action: Optional[List] = None,
+) -> Dict:
+    """Run a single episode, optionally with a pygame display window.
 
-    W, H = cfg.env.window_width, cfg.env.window_height
-
-    pygame.init()
-    screen = pygame.display.set_mode((W, H), pygame.RESIZABLE)
-    pygame.display.set_caption("World Models — Agent  [ESC / ✕ to stop]")
-    clock = pygame.time.Clock()
-    font = pygame.font.SysFont("monospace", 14)
+    debug_action: if set, overrides the controller with a fixed action every step.
+        Values are passed from the Makefile via `make debug STEER=.. GAS=.. BRAKE=..`.
+        Use this to verify the gym responds correctly, independent of training.
+    """
+    env = gym.make(cfg.env.name, render_mode="rgb_array" if render else None)
+    obs, _ = env.reset(seed=seed)
 
     h_state = rnn.initial_state(1, device)
     total_reward = 0.0
     z_traj, h_traj, rewards = [], [], []
     step = 0
     running = True
+    term = trunc = False
 
-    obs, _ = env.reset()
+    if render:
+        import pygame
+        W, H = cfg.env.window_width, cfg.env.window_height
+        pygame.init()
+        screen = pygame.display.set_mode((W, H), pygame.RESIZABLE)
+        pygame.display.set_caption("World Models — Agent  [ESC / ✕ to stop]")
+        clock = pygame.time.Clock()
+        font = pygame.font.SysFont("monospace", 14)
 
     try:
-        while running and step < cfg.env.max_steps:
-            # ── Event handling ───────────────────────────────────────────────
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    running = False
-                if event.type == pygame.VIDEORESIZE:
-                    W, H = event.w, event.h
-                    screen = pygame.display.set_mode((W, H), pygame.RESIZABLE)
-
-            if not running:
-                break
+        for step in range(cfg.env.max_steps):
+            if render:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        running = False
+                    if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                        running = False
+                    if event.type == pygame.VIDEORESIZE:
+                        W, H = event.w, event.h
+                        screen = pygame.display.set_mode((W, H), pygame.RESIZABLE)
+                if not running:
+                    break
 
             # ── Model step ───────────────────────────────────────────────────
             frame = preprocess_frame(obs, cfg.env.img_size)
@@ -75,8 +82,10 @@ def _run_display(env, vae, rnn, ctrl, cfg, device, debug_action=None) -> Dict:
                     z, torch.from_numpy(action).unsqueeze(0).to(device), h_state
                 )
 
-            z_traj.append(z.squeeze(0).cpu().numpy())
-            h_traj.append(h_vec.squeeze(0).cpu().numpy())
+            z_np = z.squeeze(0).cpu().numpy()
+            h_np = h_vec.squeeze(0).cpu().numpy()
+            z_traj.append(z_np)
+            h_traj.append(h_np)
 
             # Frame skip: hold action for N physics steps
             step_reward = 0.0
@@ -88,114 +97,61 @@ def _run_display(env, vae, rnn, ctrl, cfg, device, debug_action=None) -> Dict:
             total_reward += step_reward
             rewards.append(step_reward)
 
-            # ── Render ───────────────────────────────────────────────────────
-            # rgb_array is already car-centered (96×96 crop)
-            raw = env.render()  # [96, 96, 3] uint8
-            surf = pygame.surfarray.make_surface(raw.transpose(1, 0, 2))
-            surf = pygame.transform.smoothscale(surf, (W, H))
-            screen.blit(surf, (0, 0))
+            if render:
+                # rgb_array is already car-centered (96×96 crop)
+                raw = env.render()  # [96, 96, 3] uint8
+                surf = pygame.surfarray.make_surface(raw.transpose(1, 0, 2))
+                surf = pygame.transform.smoothscale(surf, (W, H))
+                screen.blit(surf, (0, 0))
 
-            # HUD — color reflects magnitude: green=high, red=low
-            steer_col = (255, 255, 0) if abs(action[0]) > 0.5 else (200, 200, 200)
-            gas_col   = (int(255*(1-action[1])), int(255*action[1]), 0)
-            brake_col = (int(255*action[2]), int(255*(1-action[2])), 0)
+                # HUD — color reflects magnitude: green=high, red=low
+                # Clamp to [0,1] before RGB calc — tanh outputs can be negative
+                steer_col = (255, 255, 0) if abs(action[0]) > 0.5 else (200, 200, 200)
+                gas_v     = max(0.0, float(action[1]))
+                brake_v   = max(0.0, float(action[2]))
+                gas_col   = (int(255*(1-gas_v)), int(255*gas_v), 0)
+                brake_col = (int(255*brake_v), int(255*(1-brake_v)), 0)
 
-            hud = [
-                (f"Step:   {step:4d}",           (255, 255, 255)),
-                (f"Reward: {total_reward:6.1f}", (255, 255, 255)),
-                (f"Steer:  {action[0]:+.2f}",   steer_col),
-                (f"Gas:    {action[1]:.2f}",     gas_col),
-                (f"Brake:  {action[2]:.2f}",     brake_col),
-            ]
-            for i, (line, color) in enumerate(hud):
-                txt = font.render(line, True, color)
-                backing = pygame.Surface((txt.get_width() + 6, txt.get_height() + 2))
-                backing.set_alpha(140)
-                backing.fill((0, 0, 0))
-                screen.blit(backing, (6, 6 + i * 18))
-                screen.blit(txt, (9, 7 + i * 18))
+                hud = [
+                    (f"Step:   {step:4d}",           (255, 255, 255)),
+                    (f"Reward: {total_reward:6.1f}", (255, 255, 255)),
+                    (f"Steer:  {action[0]:+.2f}",   steer_col),
+                    (f"Gas:    {action[1]:.2f}",     gas_col),
+                    (f"Brake:  {action[2]:.2f}",     brake_col),
+                ]
+                for i, (line, color) in enumerate(hud):
+                    txt = font.render(line, True, color)
+                    backing = pygame.Surface((txt.get_width() + 6, txt.get_height() + 2))
+                    backing.set_alpha(140)
+                    backing.fill((0, 0, 0))
+                    screen.blit(backing, (6, 6 + i * 18))
+                    screen.blit(txt, (9, 7 + i * 18))
 
-            pygame.display.flip()
-            clock.tick(30)   # cap at 30 fps for readability
+                pygame.display.flip()
+                clock.tick(30)   # cap at 30 fps for readability
 
-            step += 1
+                print(
+                    f"step={step:4d} | "
+                    f"steer={action[0]:+.3f}  gas={action[1]:.3f}  brake={action[2]:.3f} | "
+                    f"reward={step_reward:+.2f} | "
+                    f"|z|={np.linalg.norm(z_np):.2f}  std={z_np.std():.2f} | "
+                    f"|h|={np.linalg.norm(h_np):.2f}  std={h_np.std():.2f}"
+                )
+
             if term or trunc:
                 break
 
     except KeyboardInterrupt:
         pass
     finally:
-        pygame.quit()
-
-    return {
-        "reward": total_reward,
-        "length": step,
-        "rewards": np.array(rewards) if rewards else np.array([0.0]),
-        "z_traj": np.array(z_traj),
-        "h_traj": np.array(h_traj),
-        "frames": [],
-    }
-
-
-def run_episode(
-    vae: VAE,
-    rnn: MDNRNN,
-    ctrl: Controller,
-    cfg,
-    device: str,
-    render: bool = False,
-    seed: Optional[int] = None,
-    debug_action: Optional[List] = None,
-) -> Dict:
-    """Run a single episode. Uses custom pygame display when render=True.
-
-    debug_action: if set, overrides the controller with a fixed action every step.
-        e.g. [1.0, 0.8, 0.0] = full steer right, 80% gas, no brake.
-        Use this to verify the gym responds correctly, independent of training.
-    """
-    env = gym.make(cfg.env.name, render_mode="rgb_array")
-    if seed is not None:
-        env.reset(seed=seed)
-
-    if render:
-        result = _run_display(env, vae, rnn, ctrl, cfg, device, debug_action=debug_action)
+        if render:
+            pygame.quit()
         env.close()
-        return result
 
-    # ── Headless (no render) ──────────────────────────────────────────────────
-    h_state = rnn.initial_state(1, device)
-    total_reward = 0.0
-    z_traj, h_traj, rewards = [], [], []
-    obs, _ = env.reset(seed=seed)
-
-    for step in range(cfg.env.max_steps):
-        frame = preprocess_frame(obs, cfg.env.img_size)
-        x = torch.from_numpy(frame.transpose(2, 0, 1)).unsqueeze(0).to(device)
-        with torch.no_grad():
-            z = vae.get_latent(x)
-            h_vec = h_state[0][-1]
-            action = ctrl(z, h_vec).squeeze(0).cpu().numpy()
-            _, _, _, h_state = rnn.forward_step(
-                z, torch.from_numpy(action).unsqueeze(0).to(device), h_state
-            )
-        z_traj.append(z.squeeze(0).cpu().numpy())
-        h_traj.append(h_vec.squeeze(0).cpu().numpy())
-        step_reward = 0.0
-        for _ in range(cfg.env.frame_skip):
-            obs, reward, term, trunc, _ = env.step(action)
-            step_reward += reward
-            if term or trunc:
-                break
-        total_reward += step_reward
-        rewards.append(step_reward)
-        if term or trunc:
-            break
-
-    env.close()
     return {
         "reward": total_reward,
         "length": step + 1,
-        "rewards": np.array(rewards),
+        "rewards": np.array(rewards) if rewards else np.array([0.0]),
         "z_traj": np.array(z_traj),
         "h_traj": np.array(h_traj),
         "frames": [],

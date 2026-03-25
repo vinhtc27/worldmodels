@@ -31,24 +31,27 @@ from typing import Optional
 from models import VAE, MDNRNN, Controller
 from data import preprocess_frame, get_rollout_paths
 from utils import load_checkpoint
+from rich.console import Console
+
+console = Console()
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _load_all(cfg, device):
-    vae = VAE(cfg.vae).to(device).eval()
-    rnn = MDNRNN(cfg.rnn).to(device).eval()
+    vae  = VAE(cfg.vae).to(device).eval()
+    rnn  = MDNRNN(cfg.rnn).to(device).eval()
     ctrl = Controller(cfg.controller).to(device).eval()
 
     for path, model, label in [
-        (cfg.paths.vae_checkpoint, vae, "VAE"),
-        (cfg.paths.rnn_checkpoint, rnn, "MDN-RNN"),
+        (cfg.paths.vae_checkpoint,        vae,  "VAE"),
+        (cfg.paths.rnn_checkpoint,        rnn,  "MDN-RNN"),
         (cfg.paths.controller_checkpoint, ctrl, "Controller"),
     ]:
         if Path(path).exists():
             model.load_state_dict(load_checkpoint(path, device)["model"])
-            print(f"  {label} loaded.")
+            console.print(f"  [green]{label} loaded.")
         else:
-            print(f"  [WARN] {label} checkpoint not found — using random weights.")
+            console.print(f"  [yellow][WARN] {label} checkpoint not found — using random weights.")
     return vae, rnn, ctrl
 
 
@@ -69,7 +72,7 @@ def vae_reconstruction(cfg, n_samples: int = 8, save_path: Optional[str] = None)
 
     paths = get_rollout_paths(cfg, "train")
     if not paths:
-        print("No rollouts found.")
+        console.print("No rollouts found.")
         return
 
     # Sample random frames from a random rollout
@@ -112,7 +115,7 @@ def vae_reconstruction(cfg, n_samples: int = 8, save_path: Optional[str] = None)
 
     if save_path:
         fig.savefig(save_path, dpi=150)
-        print(f"Saved → {save_path}")
+        console.print(f"Saved → {save_path}")
     plt.show()
 
 
@@ -247,12 +250,12 @@ def rnn_dream(cfg, n_steps: int = 200, temperature: float = 1.0,
     btn.on_clicked(regen)
 
     if save_gif:
-        print(f"Saving dream GIF to {save_gif}…")
+        console.print(f"Saving dream GIF to {save_gif}…")
         writer = PillowWriter(fps=20)
         anim = FuncAnimation(fig, lambda i: im.set_data(dream_frames[i]),
                              frames=n_steps, interval=50)
         anim.save(save_gif, writer=writer)
-        print(f"Saved → {save_gif}")
+        console.print(f"Saved → {save_gif}")
 
     plt.show()
 
@@ -262,25 +265,25 @@ def rnn_dream(cfg, n_steps: int = 200, temperature: float = 1.0,
 def training_curves(cfg, save_path: Optional[str] = None):
     """Plot VAE + RNN training loss histories from saved JSON logs."""
     import json
-    from pathlib import Path
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
     fig.suptitle("Training Curves", fontsize=12)
 
-    for ax, name, metrics in [
-        (axes[0], "VAE", ["loss", "recon", "kl", "val_loss"]),
-        (axes[1], "MDN-RNN", ["loss", "val_loss"]),
+    # Log filenames match MetricLogger("vae"/"rnn", ...) → vae_history.json / rnn_history.json
+    for ax, name, log_name, metrics in [
+        (axes[0], "VAE",     "vae", ["loss", "recon", "kl", "val_loss"]),
+        (axes[1], "MDN-RNN", "rnn", ["loss", "val_loss"]),
     ]:
-        path = Path(cfg.paths.log_dir) / f"{name.lower().replace('-', '_')}_history.json"
+        path = Path(cfg.paths.log_dir) / f"{log_name}_history.json"
         if not path.exists():
             ax.text(0.5, 0.5, "No log found", ha="center", va="center")
             ax.set_title(name)
             continue
         with open(path) as f:
-            h = json.load(f)
+            history = json.load(f)
         for m in metrics:
-            if m in h:
-                ax.plot(h[m], label=m)
+            if m in history:
+                ax.plot(history[m], label=m)
         ax.set_title(name)
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Loss")
@@ -311,7 +314,7 @@ def rollout_replay(cfg, rollout_idx: int = 0, save_gif: Optional[str] = None):
 
     paths = get_rollout_paths(cfg, "train")
     if not paths:
-        print("No rollouts found.")
+        console.print("No rollouts found.")
         return
     d = np.load(paths[rollout_idx % len(paths)])
     obs     = d["obs"]      # [T, H, W, C]
@@ -371,13 +374,13 @@ def rollout_replay(cfg, rollout_idx: int = 0, save_gif: Optional[str] = None):
     slider.on_changed(update)
 
     if save_gif:
-        print(f"Saving rollout GIF to {save_gif}…")
+        console.print(f"Saving rollout GIF to {save_gif}…")
         writer = PillowWriter(fps=15)
         def anim_func(i):
             slider.set_val(i)
         anim = FuncAnimation(fig, anim_func, frames=T, interval=66)
         anim.save(save_gif, writer=writer)
-        print(f"Saved → {save_gif}")
+        console.print(f"Saved → {save_gif}")
 
     plt.show()
 
@@ -444,11 +447,11 @@ def latent_walk(cfg, n_steps: int = 60, save_gif: Optional[str] = None):
     slider.on_changed(update)
 
     if save_gif:
-        print(f"Saving latent walk GIF to {save_gif}…")
+        console.print(f"Saving latent walk GIF to {save_gif}…")
         writer = PillowWriter(fps=20)
         anim = FuncAnimation(fig, lambda i: im.set_data(frames_walk[i]),
                              frames=n_steps, interval=50)
         anim.save(save_gif, writer=writer)
-        print(f"Saved → {save_gif}")
+        console.print(f"Saved → {save_gif}")
 
     plt.show()

@@ -16,6 +16,7 @@ console = Console()
 
 
 def set_seed(seed: int):
+    """Seed all RNGs for reproducibility across Python, NumPy, and PyTorch."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -46,18 +47,30 @@ def load_json(path: str) -> dict:
 
 
 class MetricLogger:
-    """Accumulates metrics per epoch and prints a rich table."""
+    """
+    Accumulates per-batch metrics, commits epoch averages, and prints a rich table.
+
+    Usage:
+        logger = MetricLogger("vae", cfg.paths.log_dir)
+        for batch in loader:
+            ...
+            logger.update(loss=loss.item(), kl=kl.item())
+        logger.print_epoch(epoch, total_epochs)  # commits + prints
+        logger.save()                             # writes history to JSON
+    """
     def __init__(self, name: str, log_dir: str):
-        self.name = name
-        self.log_dir = log_dir
-        self.history: Dict[str, list] = {}
+        self.name      = name
+        self.log_dir   = log_dir
+        self.history:   Dict[str, list] = {}
         self._step_buf: Dict[str, list] = {}
 
     def update(self, **kwargs):
+        """Buffer per-batch values — averaged at commit time."""
         for k, v in kwargs.items():
             self._step_buf.setdefault(k, []).append(float(v))
 
     def commit(self, epoch: int):
+        """Average buffered values and append to history. Returns the epoch row."""
         row = {"epoch": epoch}
         for k, vals in self._step_buf.items():
             avg = sum(vals) / len(vals)
@@ -67,10 +80,10 @@ class MetricLogger:
         return row
 
     def print_epoch(self, epoch: int, total: int):
-        row = self.commit(epoch)
+        row   = self.commit(epoch)
         table = Table(title=f"[bold]{self.name}[/] — Epoch {epoch}/{total}", show_header=True)
         table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="green")
+        table.add_column("Value",  style="green")
         for k, v in row.items():
             if k != "epoch":
                 table.add_row(k, f"{v:.4f}")
@@ -78,6 +91,7 @@ class MetricLogger:
         return row
 
     def save(self):
+        """Write full metric history to JSON for later plotting."""
         path = os.path.join(self.log_dir, f"{self.name}_history.json")
         save_json(self.history, path)
 

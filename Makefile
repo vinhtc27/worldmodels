@@ -1,4 +1,4 @@
-.PHONY: help install clean clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves
+.PHONY: help install clean clean-checkpoints clean-data clean-logs clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves
 
 PYTHON = venv/bin/python
 VENV   = venv
@@ -11,12 +11,19 @@ help:
 	@echo ""
 	@echo "  Setup"
 	@echo "    make install          Install dependencies into venv"
-	@echo "    make clean            Remove checkpoints, logs, and collected data"
+	@echo "    make clean            Remove all generated files (checkpoints, logs, data)"\
+	@echo "    make clean-checkpoints  Remove only model checkpoints (.pt files)"\
+	@echo "    make clean-data       Remove only collected rollouts"\
+	@echo "    make clean-logs       Remove only training logs"
 	@echo "    make clean-all        Remove everything including venv"
 	@echo ""
 	@echo "  Quick runs"
 	@echo "    make quick            Collect + train VAE (~2 min), open viz"
 	@echo "    make full             Full pipeline with minimal settings (~10 min), watch agent play"
+	@echo "    make quick-collect    Collect 10 rollouts"
+	@echo "    make quick-vae        Train VAE for 2 epochs"
+	@echo "    make quick-rnn        Train MDN-RNN for 3 epochs"
+	@echo "    make quick-ctrl       Train controller: 5 gens x pop 4"
 	@echo "    make debug            Verify gym works: fixed steer/gas/brake, ignores controller"
 	@echo ""
 	@echo "  Pipeline (step by step)"
@@ -47,9 +54,20 @@ install:
 	$(VENV)/bin/pip install -r requirements.txt
 	@echo "Done. Activate with: source venv/bin/activate"
 
-clean:
-	rm -rf checkpoints/* logs/* data/rollouts/
-	@echo "Cleared checkpoints, logs, and rollouts."
+clean: clean-checkpoints clean-data clean-logs
+	@echo "All generated files removed."
+
+clean-checkpoints:
+	rm -rf checkpoints/*
+	@echo "Checkpoints removed."
+
+clean-data:
+	rm -rf data/rollouts/
+	@echo "Rollout data removed."
+
+clean-logs:
+	rm -rf logs/*
+	@echo "Logs removed."
 
 clean-all: clean
 	rm -rf $(VENV)
@@ -63,9 +81,13 @@ quick:
 full:
 	$(PYTHON) main.py quick --full
 
+STEER ?= 0.1
+GAS   ?= 0.05
+BRAKE ?= 0.0
+
 debug:
-	@echo "Running with fixed action [steer=+0.5, gas=0.1, brake=0.1] to verify gym physics..."
-	$(PYTHON) main.py eval --render --episodes 1 --debug 0.5 0.5 0.1
+	@echo "Running with fixed action [steer=$(STEER), gas=$(GAS), brake=$(BRAKE)] to verify gym physics..."
+	$(PYTHON) main.py eval --render --episodes 1 --debug-action $(STEER) $(GAS) $(BRAKE)
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 
@@ -80,6 +102,18 @@ train-rnn:
 
 train-ctrl:
 	$(PYTHON) main.py train-ctrl
+
+quick-collect:
+	$(PYTHON) main.py collect --n-rollouts 10
+
+quick-vae:
+	$(PYTHON) main.py train-vae --epochs 2
+
+quick-rnn:
+	$(PYTHON) main.py train-rnn --epochs 3
+
+quick-ctrl:
+	$(PYTHON) main.py train-ctrl --generations 5 --pop-size 4 --n-workers 1
 
 train: train-vae train-rnn train-ctrl
 
