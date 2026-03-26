@@ -96,7 +96,7 @@ def build_parser():
     p_eval = sub.add_parser("eval", help="Evaluate the full pipeline")
     p_eval.add_argument("--episodes",     type=int, default=10)
     p_eval.add_argument("--render",       action="store_true")
-    p_eval.add_argument("--seed",         type=int, default=42)
+    p_eval.add_argument("--seed",         type=int, default=None)
     p_eval.add_argument("--window-size",  type=int, nargs=2, metavar=("W", "H"),
                         default=None, help="Render window size e.g. --window-size 600 600")
     p_eval.add_argument("--debug-action", type=float, nargs=3, metavar=("STEER", "GAS", "BRAKE"),

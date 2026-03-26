@@ -198,7 +198,7 @@ def evaluate(cfg, n_episodes: int = 10, render: bool = False, seed: Optional[int
     try:
         for i in range(n_episodes):
             console.print(f"  Episode {i+1}/{n_episodes}")
-            ep_seed = (seed or 0) + i
+            ep_seed = None if seed is None else seed + i
             r = run_episode(vae, rnn, ctrl, cfg, device, render=render, seed=ep_seed,
                             debug_action=debug_action)
             results.append(r)
