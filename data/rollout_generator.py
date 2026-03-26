@@ -56,7 +56,8 @@ def collect_rollouts(cfg, n_rollouts: Optional[int] = None, tag: str = "train"):
     save_dir = Path(cfg.paths.data_dir) / tag
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    env = gym.make(cfg.env.name, render_mode=cfg.env.render_mode)
+    env = gym.make(cfg.env.name, render_mode=cfg.env.render_mode,
+                   max_episode_steps=cfg.env.max_steps * cfg.env.frame_skip)
     rng = np.random.default_rng(seed=None)
 
     paths = []

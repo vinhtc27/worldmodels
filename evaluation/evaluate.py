@@ -34,7 +34,11 @@ def run_episode(
         Values are passed from the Makefile via `make debug STEER=.. GAS=.. BRAKE=..`.
         Use this to verify the gym responds correctly, independent of training.
     """
-    env = gym.make(cfg.env.name, render_mode="rgb_array" if render else None)
+    env = gym.make(
+        cfg.env.name,
+        render_mode="rgb_array" if render else None,
+        max_episode_steps=cfg.env.max_steps * cfg.env.frame_skip,
+    )
     obs, _ = env.reset(seed=seed)
 
     h_state = rnn.initial_state(1, device)
@@ -52,6 +56,8 @@ def run_episode(
         pygame.display.set_caption("World Models — Agent  [ESC / ✕ to stop]")
         clock = pygame.time.Clock()
         font = pygame.font.SysFont("monospace", 14)
+
+    print(f"max_steps = {cfg.env.max_steps}")
 
     try:
         for step in range(cfg.env.max_steps):

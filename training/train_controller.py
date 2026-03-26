@@ -64,7 +64,7 @@ def _evaluate_params(args):
     ctrl = Controller(cfg_ctrl).to(device).eval()
     ctrl.set_params(params)
 
-    env = gym.make(cfg_env.name)
+    env = gym.make(cfg_env.name, max_episode_steps=cfg_env.max_steps * cfg_env.frame_skip)
     rng = np.random.default_rng(seed)
     total_reward = 0.0
 
