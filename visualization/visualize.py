@@ -239,7 +239,7 @@ def rnn_dream(cfg, n_steps: int = 200, temperature: float = 1.0,
     def update_frame(val):
         idx = int(slider.val)
         im.set_data(state["frames"][idx])
-        fig.canvas.draw_idle()
+        fig.canvas.draw()
 
     def regen(event):
         temp = temperature  # could add a temp slider too
@@ -369,7 +369,7 @@ def rollout_replay(cfg, rollout_idx: int = 0, save_gif: Optional[str] = None):
         # Highlight current column in z heatmap
         im_z.set_data(z_np.T)
         vline.set_xdata([t, t])
-        fig.canvas.draw_idle()
+        fig.canvas.draw()
 
     slider.on_changed(update)
 
@@ -410,15 +410,19 @@ def latent_walk(cfg, n_steps: int = 60, save_gif: Optional[str] = None):
         z1 = vae.get_latent(x1)
         z2 = vae.get_latent(x2)
 
-    # Slerp interpolation
+    # Slerp interpolation (norm-preserving: slerp on unit sphere, then rescale)
     def slerp(z_a, z_b, t):
-        z_a = z_a / z_a.norm()
-        z_b = z_b / z_b.norm()
-        omega = torch.acos((z_a * z_b).sum().clamp(-1, 1))
+        norm_a = z_a.norm()
+        norm_b = z_b.norm()
+        norm_t = (1 - t) * norm_a + t * norm_b
+        z_a_n = z_a / norm_a
+        z_b_n = z_b / norm_b
+        omega = torch.acos((z_a_n * z_b_n).sum().clamp(-1, 1))
         if omega.abs() < 1e-4:
-            return (1 - t) * z_a + t * z_b
-        return (torch.sin((1 - t) * omega) / torch.sin(omega)) * z_a + \
-               (torch.sin(t * omega) / torch.sin(omega)) * z_b
+            return norm_t * ((1 - t) * z_a_n + t * z_b_n)
+        z_unit = (torch.sin((1 - t) * omega) / torch.sin(omega)) * z_a_n + \
+                 (torch.sin(t * omega) / torch.sin(omega)) * z_b_n
+        return norm_t * z_unit
 
     frames_walk = []
     for i in range(n_steps):
@@ -442,7 +446,7 @@ def latent_walk(cfg, n_steps: int = 60, save_gif: Optional[str] = None):
 
     def update(val):
         im.set_data(frames_walk[int(slider.val)])
-        fig.canvas.draw_idle()
+        fig.canvas.draw()
 
     slider.on_changed(update)
 
