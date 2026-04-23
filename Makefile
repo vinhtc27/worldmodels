@@ -1,7 +1,7 @@
 .PHONY: help install clean clean-checkpoints clean-data clean-logs clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves research
 
-PYTHON = venv/bin/python
-VENV   = venv
+PYTHON = .venv/bin/python
+VENV   = .venv
 
 # ── Default ───────────────────────────────────────────────────────────────────
 
@@ -55,9 +55,8 @@ help:
 
 install:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip install --upgrade pip
 	$(VENV)/bin/pip install -r requirements.txt
-	@echo "Done. Activate with: source venv/bin/activate"
+	@echo "Done. Activate with: source .venv/bin/activate"
 
 clean: clean-checkpoints clean-data clean-logs
 	@echo "All generated files removed."

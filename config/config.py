@@ -3,6 +3,7 @@ Central configuration for World Models.
 Edit any section to adjust architecture or training hyperparameters.
 All components read from a single Config instance so values stay in sync.
 """
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -73,7 +74,7 @@ class ControllerConfig:
     n_generations:    int   = 50    # generations to run (paper uses 200+)
     sigma0:           float = 0.1   # initial search radius in parameter space
     n_eval_episodes:  int   = 4     # episodes per candidate (more = less noisy fitness)
-    n_workers:        int   = 4     # parallel worker processes (set 1 to disable)
+    n_workers:        int   = field(default_factory=lambda: os.cpu_count() or 4)  # parallel worker processes (set 1 to disable)
 
 
 # ─── Paths ───────────────────────────────────────────────────────────────────

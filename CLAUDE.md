@@ -7,8 +7,8 @@ Three independently trained components: VAE (vision) → MDN-RNN (memory) → Co
 
 ## Environment
 
-- Python 3.9, venv at `venv/` — always use `venv/bin/python`, never system python
-- Run commands: `source venv/bin/activate` or prefix with `venv/bin/python`
+- Python 3.9, venv at `.venv/` — always use `.venv/bin/python`, never system python
+- Run commands: `source .venv/bin/activate` or prefix with `.venv/bin/python`
 - Key packages: torch 2.8, gymnasium 1.1 (CarRacing-v3), cma, pygame 2.5.2 (NOT 2.6.x — macOS crash), rich, matplotlib (MacOSX backend on macOS, NOT TkAgg)
 
 ## Project layout

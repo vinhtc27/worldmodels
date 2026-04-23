@@ -11,6 +11,7 @@ At each step the RNN receives [z_t ; a_t] and must predict the distribution
 of z_{t+1}. Backpropagation Through Time (BPTT) is truncated to seq_len
 steps to keep memory bounded.
 """
+import os
 import torch
 from torch.utils.data import DataLoader, random_split
 from pathlib import Path
@@ -47,10 +48,13 @@ def train_rnn(cfg, resume: bool = False):
         dataset, [len(dataset) - val_size, val_size],
         generator=torch.Generator().manual_seed(cfg.seed),
     )
+    num_workers = min((os.cpu_count() or 4) // 2, 4)  # data loading is not the bottleneck; more workers waste RAM and contend with training
     train_loader = DataLoader(train_ds, batch_size=cfg.rnn.batch_size, shuffle=True,
-                              num_workers=2, pin_memory=True)
+                              num_workers=num_workers, pin_memory=True,
+                              persistent_workers=num_workers > 0)
     val_loader   = DataLoader(val_ds,   batch_size=cfg.rnn.batch_size, shuffle=False,
-                              num_workers=2, pin_memory=True)
+                              num_workers=num_workers, pin_memory=True,
+                              persistent_workers=num_workers > 0)
 
     console.print(f"  Train windows: {len(train_ds)}  |  Val windows: {len(val_ds)}")
 
