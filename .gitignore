@@ -1,14 +1,17 @@
 # Virtual environment
 venv/
 
-# Generated data
-data/rollouts/
+# Generated datas
+data/
 
 # Checkpoints
 checkpoints/
 
 # Logs
 logs/
+
+# Research results
+research/
 
 # Python
 __pycache__/

@@ -61,6 +61,11 @@ def build_parser():
         description="World Models — modular PyTorch implementation",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument(
+        "--base-dir", default=None,
+        help="Root directory for all outputs (data, checkpoints, logs). "
+             "Overrides all cfg.paths entries. Created if it does not exist.",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # ── collect ───────────────────────────────────────────────────────────────
@@ -152,6 +157,23 @@ def build_parser():
                          help="Run ALL steps (collect→VAE→RNN→Controller) then watch the agent play live (~5-10 min)")
 
     return parser
+
+
+# ── Path redirection ──────────────────────────────────────────────────────────
+
+def apply_base_dir(cfg, base_dir: str):
+    """Redirect every cfg.paths entry under base_dir, creating dirs as needed."""
+    import os
+    from pathlib import Path
+    base = Path(base_dir)
+    cfg.paths.data_dir              = str(base / "data" / "rollouts")
+    cfg.paths.checkpoint_dir        = str(base / "checkpoints")
+    cfg.paths.log_dir               = str(base / "logs")
+    cfg.paths.vae_checkpoint        = str(base / "checkpoints" / "vae_best.pt")
+    cfg.paths.rnn_checkpoint        = str(base / "checkpoints" / "rnn_best.pt")
+    cfg.paths.controller_checkpoint = str(base / "checkpoints" / "controller_best.pt")
+    for d in (cfg.paths.data_dir, cfg.paths.checkpoint_dir, cfg.paths.log_dir):
+        os.makedirs(d, exist_ok=True)
 
 
 # ── Apply CLI overrides to config ─────────────────────────────────────────────
@@ -409,6 +431,8 @@ def main():
 
     from config import cfg
     apply_overrides(cfg, args)
+    if args.base_dir:
+        apply_base_dir(cfg, args.base_dir)
 
     console.print(f"  Device: [cyan]{cfg.get_device()}[/]   Env: [cyan]{cfg.env.name}[/]   Seed: [cyan]{cfg.seed}[/]\n")
 

@@ -1,4 +1,4 @@
-.PHONY: help install clean clean-checkpoints clean-data clean-logs clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves
+.PHONY: help install clean clean-checkpoints clean-data clean-logs clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves research
 
 PYTHON = venv/bin/python
 VENV   = venv
@@ -32,6 +32,11 @@ help:
 	@echo "    make train-rnn        Train the MDN-RNN (Memory model)"
 	@echo "    make train-ctrl       Train the Controller with CMA-ES"
 	@echo "    make train            Run all three training steps in sequence"
+	@echo ""
+	@echo "  Research (paper-scale)"
+	@echo "    make research         Full pipeline at Ha & Schmidhuber scale:"
+	@echo "                          10k rollouts | VAE 1ep | RNN 20ep | CMA-ES 1800gen×pop64"
+	@echo "                          All outputs saved to research/ (override: RESEARCH_DIR=path)"
 	@echo ""
 	@echo "  Evaluate"
 	@echo "    make eval             Benchmark: 100 episodes headless (paper protocol)"
@@ -116,6 +121,22 @@ quick-ctrl:
 	$(PYTHON) main.py train-ctrl --generations 5 --pop-size 4 --n-workers 1
 
 train: train-vae train-rnn train-ctrl
+
+# ── Research (paper-scale) ────────────────────────────────────────────────────
+
+RESEARCH_DIR ?= research
+
+research:
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-vae --epochs 1
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-rnn --epochs 20
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64 --n-workers 4
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) eval --episodes 100
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel vae_reconstruction --save $(RESEARCH_DIR)/viz_reconstruction.png
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel latent_space       --save $(RESEARCH_DIR)/viz_latent.png
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel training_curves     --save $(RESEARCH_DIR)/viz_curves.png
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel latent_walk         --save $(RESEARCH_DIR)/viz_walk.gif
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel rnn_dream           --save $(RESEARCH_DIR)/viz_dream.gif
 
 # ── Evaluate ──────────────────────────────────────────────────────────────────
 
