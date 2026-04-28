@@ -63,7 +63,7 @@ def build_parser():
     )
     parser.add_argument(
         "--base-dir", default=None,
-        help="Root directory for all outputs (data, checkpoints, logs). "
+        help="Root directory for all outputs (data, checkpoint, log). "
              "Overrides all cfg.paths entries. Created if it does not exist.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -72,6 +72,8 @@ def build_parser():
     p_collect = sub.add_parser("collect", help="Collect random rollouts from the environment")
     p_collect.add_argument("--n-rollouts", type=int, default=None,
                            help="Override cfg.env.n_rollouts")
+    p_collect.add_argument("--n-workers",  type=int, default=None,
+                           help="Parallel workers (1=sequential, >1 multiprocessing)")
     p_collect.add_argument("--tag", default="train", help="Dataset split tag")
 
     # ── train-vae ─────────────────────────────────────────────────────────────
@@ -168,11 +170,11 @@ def apply_base_dir(cfg, base_dir: str):
     from pathlib import Path
     base = Path(base_dir)
     cfg.paths.data_dir              = str(base / "data" / "rollouts")
-    cfg.paths.checkpoint_dir        = str(base / "checkpoints")
-    cfg.paths.log_dir               = str(base / "logs")
-    cfg.paths.vae_checkpoint        = str(base / "checkpoints" / "vae_best.pt")
-    cfg.paths.rnn_checkpoint        = str(base / "checkpoints" / "rnn_best.pt")
-    cfg.paths.controller_checkpoint = str(base / "checkpoints" / "controller_best.pt")
+    cfg.paths.checkpoint_dir        = str(base / "checkpoint")
+    cfg.paths.log_dir               = str(base / "log")
+    cfg.paths.vae_checkpoint        = str(base / "checkpoint" / "vae_best.pt")
+    cfg.paths.rnn_checkpoint        = str(base / "checkpoint" / "rnn_best.pt")
+    cfg.paths.controller_checkpoint = str(base / "checkpoint" / "controller_best.pt")
     for d in (cfg.paths.data_dir, cfg.paths.checkpoint_dir, cfg.paths.log_dir):
         os.makedirs(d, exist_ok=True)
 
@@ -208,7 +210,9 @@ def apply_overrides(cfg, args):
 def cmd_collect(args, cfg):
     from data import collect_rollouts
     n = args.n_rollouts or cfg.env.n_rollouts
-    console.print(Panel(f"Collecting [cyan]{n}[/] rollouts  (env: [bold]{cfg.env.name}[/])"))
+    if args.n_workers is not None:
+        cfg.env.n_workers = args.n_workers
+    console.print(Panel(f"Collecting [cyan]{n}[/] rollouts  (env: [bold]{cfg.env.name}[/], workers=[cyan]{cfg.env.n_workers}[/])"))
     collect_rollouts(cfg, n_rollouts=n, tag=args.tag)
 
 
@@ -287,7 +291,7 @@ def cmd_quick(args, cfg):
 
     if args.full:
         # ── Full quick pipeline: all steps with tiny settings, ends with live play ──
-        cfg.env.n_rollouts          = 10
+        cfg.env.n_rollouts          = 15
         cfg.env.max_steps           = args.max_steps
         cfg.vae.epochs              = 2
         cfg.vae.batch_size          = 32
@@ -300,7 +304,7 @@ def cmd_quick(args, cfg):
 
         console.print(Panel(
             "[bold green]Quick FULL pipeline[/]\n"
-            "10 rollouts  |  VAE 2 epochs  |  RNN 3 epochs  |  CMA-ES 5 gens × pop 4\n"
+            "15 rollouts  |  VAE 2 epochs  |  RNN 3 epochs  |  CMA-ES 5 gens × pop 4\n"
             "[dim]The agent won't drive well — but you'll see it play live at the end[/]",
             title="~5-10 min end-to-end",
         ))
@@ -358,6 +362,7 @@ def cmd_quick(args, cfg):
         if args.skip_collect:
             _skip_msg("data collection")
         else:
+            cfg.env.n_workers = 4
             collect_rollouts(cfg, tag="train")
 
         console.rule("[bold cyan]2/3  Train VAE")

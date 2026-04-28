@@ -13,11 +13,14 @@ from typing import Optional
 @dataclass
 class EnvConfig:
     name: str       = "CarRacing-v3"
-    img_size: int   = 64     # resize frames to img_size × img_size before encoding
-    frame_skip: int = 4      # repeat each action N physics steps (paper uses 4)
-                             # reduces decision frequency, speeds up training
-    max_steps: int  = 1000   # episode cutoff (1000 steps × frame_skip=4 = 4000 frames)
-    n_rollouts: int = 200    # random rollouts to collect for VAE/RNN training
+    img_size: int   = 64            # resize frames to img_size × img_size before encoding
+    frame_skip: int = 4             # repeat each action N physics steps (paper uses 4)
+                                    # reduces decision frequency, speeds up training
+    max_steps: int  = 1000          # episode cutoff (1000 steps × frame_skip=4 = 4000 frames)
+    n_rollouts: int = 200           # random rollouts to collect for VAE/RNN training
+    n_workers:  int = 1             # parallel workers for rollout collection (1=sequential)
+    reward_cutoff: float = -100.0   # cut episode early if cumulative reward drops below this (paper: -100)
+
     # Render window size (used during eval --render)
     window_width:  int = 500
     window_height: int = 500
@@ -82,11 +85,11 @@ class ControllerConfig:
 @dataclass
 class PathConfig:
     data_dir:               str = "data/rollouts"
-    checkpoint_dir:         str = "checkpoints"
-    log_dir:                str = "logs"
-    vae_checkpoint:         str = "checkpoints/vae_best.pt"
-    rnn_checkpoint:         str = "checkpoints/rnn_best.pt"
-    controller_checkpoint:  str = "checkpoints/controller_best.pt"
+    checkpoint_dir:         str = "checkpoint"
+    log_dir:                str = "log"
+    vae_checkpoint:         str = "checkpoint/vae_best.pt"
+    rnn_checkpoint:         str = "checkpoint/rnn_best.pt"
+    controller_checkpoint:  str = "checkpoint/controller_best.pt"
 
 
 # ─── Master Config ────────────────────────────────────────────────────────────

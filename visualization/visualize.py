@@ -263,7 +263,7 @@ def rnn_dream(cfg, n_steps: int = 200, temperature: float = 1.0,
 # ── 4. Training Curves ────────────────────────────────────────────────────────
 
 def training_curves(cfg, save_path: Optional[str] = None):
-    """Plot VAE + RNN training loss histories from saved JSON logs."""
+    """Plot VAE + RNN training loss histories from saved JSON log."""
     import json
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
@@ -324,7 +324,7 @@ def rollout_replay(cfg, rollout_idx: int = 0, save_gif: Optional[str] = None):
     # Encode all frames
     x_all = torch.from_numpy((obs.astype(np.float32) / 255.0).transpose(0, 3, 1, 2)).to(device)
     with torch.no_grad():
-        z_all, logvar_all = vae.encode(x_all)
+        z_all, _ = vae.encode(x_all)
         recon_all = vae.decode(z_all)
     z_np    = z_all.cpu().numpy()        # [T, D]
     recon_np = recon_all.cpu().permute(0, 2, 3, 1).numpy().clip(0, 1)  # [T, H, W, C]

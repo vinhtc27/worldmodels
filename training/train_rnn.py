@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader, random_split
 from pathlib import Path
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, MofNCompleteColumn
 
 from models import MDNRNN
 from data import LatentSequenceDataset
@@ -84,28 +84,33 @@ def train_rnn(cfg, resume: bool = False):
         console.print(f"[yellow]Resumed from epoch {start_epoch - 1}")
 
     logger = MetricLogger("rnn", cfg.paths.log_dir)
+    n_epochs = cfg.rnn.epochs
 
     # ── Training loop ─────────────────────────────────────────────────────────
-    for epoch in range(start_epoch, cfg.rnn.epochs + 1):
-        rnn.train()
-        with Progress(
-            SpinnerColumn(),
-            TextColumn(f"[cyan]Epoch {epoch}/{cfg.rnn.epochs}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeElapsedColumn(),
-            console=console,
-            transient=True,
-        ) as progress:
-            task = progress.add_task("train", total=len(train_loader))
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]MDN-RNN"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TextColumn("[cyan]{task.fields[status]}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        epoch_task = progress.add_task("epochs", total=n_epochs - start_epoch + 1, status=f"Epoch {start_epoch}/{n_epochs}")
+        batch_task = progress.add_task("batches", total=len(train_loader), status="")
+
+        for epoch in range(start_epoch, n_epochs + 1):
+            progress.update(epoch_task, status=f"Epoch {epoch}/{n_epochs}")
+            progress.reset(batch_task, total=len(train_loader))
+            rnn.train()
             for z_seq, a_seq in train_loader:
                 z_seq = z_seq.to(device, non_blocking=True)  # [B, T+1, D]
                 a_seq = a_seq.to(device, non_blocking=True)  # [B, T+1, A]
 
-                # Next-step prediction: feed z_t and a_t, predict z_{t+1}
-                z_in   = z_seq[:, :-1, :]  # [B, T, D] — inputs
-                z_next = z_seq[:, 1:,  :]  # [B, T, D] — targets
-                a_in   = a_seq[:, :-1, :]  # [B, T, A]
+                z_in   = z_seq[:, :-1, :]
+                z_next = z_seq[:, 1:,  :]
+                a_in   = a_seq[:, :-1, :]
 
                 with torch.autocast(device_type=device, dtype=amp_dtype, enabled=use_amp):
                     log_pi, mu, sigma, _ = rnn(z_in, a_in)
@@ -124,42 +129,45 @@ def train_rnn(cfg, resume: bool = False):
                     optimizer.step()
 
                 logger.update(loss=loss)
-                progress.advance(task)
+                progress.advance(batch_task)
 
-        # ── Validation ────────────────────────────────────────────────────────
-        rnn.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for z_seq, a_seq in val_loader:
-                z_seq  = z_seq.to(device, non_blocking=True)
-                a_seq  = a_seq.to(device, non_blocking=True)
-                z_in   = z_seq[:, :-1, :]
-                z_next = z_seq[:, 1:,  :]
-                a_in   = a_seq[:, :-1, :]
-                with torch.autocast(device_type=device, dtype=amp_dtype, enabled=use_amp):
-                    log_pi, mu, sigma, _ = rnn(z_in, a_in)
-                    val_loss += rnn.mdn_loss(z_next, log_pi, mu, sigma).item()
-        val_loss /= len(val_loader)
-        logger.update(val_loss=val_loss)
+            # ── Validation ────────────────────────────────────────────────────
+            rnn.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for z_seq, a_seq in val_loader:
+                    z_seq  = z_seq.to(device, non_blocking=True)
+                    a_seq  = a_seq.to(device, non_blocking=True)
+                    z_in   = z_seq[:, :-1, :]
+                    z_next = z_seq[:, 1:,  :]
+                    a_in   = a_seq[:, :-1, :]
+                    with torch.autocast(device_type=device, dtype=amp_dtype, enabled=use_amp):
+                        log_pi, mu, sigma, _ = rnn(z_in, a_in)
+                        val_loss += rnn.mdn_loss(z_next, log_pi, mu, sigma).item()
+            val_loss /= len(val_loader)
+            logger.update(val_loss=val_loss)
 
-        row = logger.print_epoch(epoch, cfg.rnn.epochs)
-        scheduler.step()
+            logger.print_epoch(epoch, n_epochs)
+            scheduler.step()
 
-        # ── Checkpoint ────────────────────────────────────────────────────────
-        ckpt = {
-            "epoch":     epoch,
-            "model":     rnn.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "best_val":  best_val,
-        }
-        if val_loss < best_val:
-            best_val       = val_loss
-            ckpt["best_val"] = best_val
-            save_checkpoint(ckpt, cfg.paths.rnn_checkpoint)
-            console.print(f"  [green]✓ Best RNN saved (val_loss={val_loss:.4f})")
+            # ── Checkpoint ────────────────────────────────────────────────────
+            ckpt = {
+                "epoch":     epoch,
+                "model":     rnn.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "best_val":  best_val,
+            }
+            if val_loss < best_val:
+                best_val         = val_loss
+                ckpt["best_val"] = best_val
+                save_checkpoint(ckpt, cfg.paths.rnn_checkpoint)
+                console.print(f"  [green]✓ Best RNN saved (val_loss={val_loss:.4f})")
 
-        if epoch % cfg.rnn.save_interval == 0:
-            save_checkpoint(ckpt, f"{cfg.paths.checkpoint_dir}/rnn_epoch_{epoch:03d}.pt")
+            if epoch % cfg.rnn.save_interval == 0:
+                save_checkpoint(ckpt, f"{cfg.paths.checkpoint_dir}/rnn_epoch_{epoch:03d}.pt")
+
+            progress.update(epoch_task, status=f"Epoch {epoch}/{n_epochs} — val_loss={val_loss:.4f}")
+            progress.advance(epoch_task)
 
     logger.save()
     console.print("[bold green]MDN-RNN training complete.")

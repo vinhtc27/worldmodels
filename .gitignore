@@ -1,16 +1,16 @@
 # Virtual environment
 .venv/
 
-# Generated datas
-data/
+# Generated data
+data/rollouts/
 
-# Checkpoints
-checkpoints/
+# Checkpoint
+checkpoint/
 
-# Logs
-logs/
+# Log
+log/
 
-# Research results
+# Research result
 research/
 
 # Python
@@ -19,15 +19,6 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-
-# Jupyter
-.ipynb_checkpoints/
-*.ipynb
-
-# Outputs
-*.gif
-*.png
-*.mp4
 
 # macOS
 .DS_Store

@@ -22,6 +22,9 @@ evaluation/           — evaluate.py (run agent, custom pygame window)
 visualization/        — visualize.py (6 interactive matplotlib panels)
 main.py               — single CLI entry point for everything
 Makefile              — run `make help` to see all commands
+checkpoint/           — saved model weights (.pt files)
+log/                  — training metric histories (JSON)
+data/rollouts/        — collected rollout .npz files
 ```
 
 ## Architecture defaults (config/config.py)
@@ -43,6 +46,27 @@ collect  →  train-vae  →  (auto-encodes rollouts)  →  train-rnn  →  trai
 - train-vae automatically encodes all rollouts to z after finishing
 - train-rnn reads `*_encoded.npz` files, fails if VAE hasn't run yet
 - train-ctrl evaluates in real env, does NOT use rollout data
+
+## Quick run params (all consistent)
+
+| Command | Rollouts | VAE epochs | RNN epochs | Ctrl gens | Pop size |
+| --- | --- | --- | --- | --- | --- |
+| `make quick` | 15 | 2 | — | — | — |
+| `make full` | 15 | 2 | 3 | 5 | 4 |
+| `make quick-collect` | 15 | — | — | — | — |
+| `make quick-vae` | — | 2 | — | — | — |
+| `make quick-rnn` | — | — | 3 | — | — |
+| `make quick-ctrl` | — | — | — | 5 | 4 |
+
+## Frame normalization
+
+Frames from the environment are uint8 [0, 255]. **Always normalize to float32 [0, 1] before passing to the VAE:**
+
+```python
+x = torch.from_numpy((frame.astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0)
+```
+
+This applies in `evaluate.py`, `train_controller.py`, and anywhere `preprocess_frame()` output feeds into a model. The visualization helper `_frame_to_tensor()` in `visualize.py` is the canonical reference.
 
 ## Known gotchas
 

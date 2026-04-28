@@ -57,8 +57,6 @@ def run_episode(
         clock = pygame.time.Clock()
         font = pygame.font.SysFont("monospace", 14)
 
-    print(f"max_steps = {cfg.env.max_steps}")
-
     try:
         for step in range(cfg.env.max_steps):
             if render:
@@ -75,7 +73,7 @@ def run_episode(
 
             # ── Model step ───────────────────────────────────────────────────
             frame = preprocess_frame(obs, cfg.env.img_size)
-            x = torch.from_numpy(frame.transpose(2, 0, 1)).unsqueeze(0).to(device)
+            x = torch.from_numpy((frame.astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
 
             with torch.no_grad():
                 z = vae.get_latent(x)

@@ -1,4 +1,4 @@
-.PHONY: help install clean clean-checkpoints clean-data clean-logs clean-research clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves research
+.PHONY: help install clean clean-checkpoint clean-data clean-log clean-research clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves research
 
 PYTHON = .venv/bin/python
 VENV   = .venv
@@ -11,17 +11,17 @@ help:
 	@echo ""
 	@echo "  Setup"
 	@echo "    make install          Install dependencies into venv"
-	@echo "    make clean            Remove all generated files (checkpoints, logs, data, research)"
-	@echo "    make clean-checkpoints  Remove only model checkpoints (.pt files)"
+	@echo "    make clean            Remove all generated files (checkpoint, log, data, research)"
+	@echo "    make clean-checkpoint Remove only model checkpoint (.pt files)"
 	@echo "    make clean-data       Remove only collected rollouts"
-	@echo "    make clean-logs       Remove only training logs"
+	@echo "    make clean-log        Remove only training log"
 	@echo "    make clean-research   Remove only research/ output folder"
 	@echo "    make clean-all        Remove everything including venv"
 	@echo ""
 	@echo "  Quick runs"
 	@echo "    make quick            Collect + train VAE (~2 min), open viz"
 	@echo "    make full             Full pipeline with minimal settings (~10 min), watch agent play"
-	@echo "    make quick-collect    Collect 10 rollouts"
+	@echo "    make quick-collect    Collect 15 rollouts"
 	@echo "    make quick-vae        Train VAE for 2 epochs"
 	@echo "    make quick-rnn        Train MDN-RNN for 3 epochs"
 	@echo "    make quick-ctrl       Train controller: 5 gens x pop 4"
@@ -59,20 +59,20 @@ install:
 	$(VENV)/bin/pip install -r requirements.txt
 	@echo "Done. Activate with: source .venv/bin/activate"
 
-clean: clean-checkpoints clean-data clean-logs clean-research
+clean: clean-checkpoint clean-data clean-log clean-research
 	@echo "All generated files removed."
 
-clean-checkpoints:
-	rm -rf checkpoints/*
-	@echo "Checkpoints removed."
+clean-checkpoint:
+	rm -rf checkpoint/*
+	@echo "Checkpoint removed."
 
 clean-data:
 	rm -rf data/rollouts/
 	@echo "Rollout data removed."
 
-clean-logs:
-	rm -rf logs/*
-	@echo "Logs removed."
+clean-log:
+	rm -rf log/*
+	@echo "Log removed."
 
 clean-research:
 	rm -rf $(RESEARCH_DIR)
@@ -113,7 +113,7 @@ train-ctrl:
 	$(PYTHON) main.py train-ctrl
 
 quick-collect:
-	$(PYTHON) main.py collect --n-rollouts 10
+	$(PYTHON) main.py collect --n-rollouts 15 --n-workers 4
 
 quick-vae:
 	$(PYTHON) main.py train-vae --epochs 2
@@ -131,7 +131,7 @@ train: train-vae train-rnn train-ctrl
 RESEARCH_DIR ?= research
 
 research:
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000 --n-workers 4
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-vae --epochs 1
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-rnn --epochs 20
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64 --n-eval-episodes 16

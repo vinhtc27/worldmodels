@@ -73,15 +73,16 @@ def _evaluate_params(args):
         h_state  = rnn.initial_state(1, device)
         ep_reward = 0.0
 
+        cumulative_reward = 0.0
         for _ in range(cfg_env.max_steps):
             frame = preprocess_frame(obs, cfg_env.img_size)
-            x = torch.from_numpy(frame.transpose(2, 0, 1)).unsqueeze(0)
+            x = torch.from_numpy((frame.astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
             with torch.no_grad():
                 z      = vae.get_latent(x)
                 h_vec  = h_state[0][-1]
-                action = ctrl(z, h_vec).squeeze(0).numpy()
+                action = ctrl(z, h_vec).squeeze(0).cpu().numpy()
                 _, _, _, h_state = rnn.forward_step(
-                    z, torch.from_numpy(action).unsqueeze(0), h_state
+                    z, torch.from_numpy(action).unsqueeze(0).to(device), h_state
                 )
 
             step_reward = 0.0
@@ -91,7 +92,8 @@ def _evaluate_params(args):
                 if term or trunc:
                     break
             ep_reward += step_reward
-            if term or trunc:
+            cumulative_reward += step_reward
+            if term or trunc or cumulative_reward < cfg_env.reward_cutoff:
                 break
 
         total_reward += ep_reward
@@ -153,71 +155,76 @@ def train_controller(cfg, vae: VAE = None, rnn: MDNRNN = None, resume: bool = Fa
     rnn_state = {k: v.cpu() for k, v in rnn.state_dict().items()}
 
     # ── Evolution loop ────────────────────────────────────────────────────────
-    for gen in range(start_gen, cfg.controller.n_generations):
-        solutions = es.ask()
+    n_gens = cfg.controller.n_generations
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]CMA-ES"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TextColumn("•"),
+        TextColumn("[cyan]{task.fields[status]}"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        gen_task = progress.add_task("gens", total=n_gens - start_gen, status=f"Gen {start_gen+1}/{n_gens}")
 
-        args_list = [
-            (
-                sol,
-                vae_state, rnn_state,
-                cfg.env, cfg.vae, cfg.rnn, cfg.controller,
-                cfg.seed + gen * cfg.controller.pop_size + i,
-            )
-            for i, sol in enumerate(solutions)
-        ]
+        for gen in range(start_gen, n_gens):
+            progress.update(gen_task, status=f"Gen {gen+1}/{n_gens} — evaluating {cfg.controller.pop_size} candidates")
+            solutions = es.ask()
 
-        rewards  = np.zeros(len(solutions))
-        n_workers = min(cfg.controller.n_workers, len(solutions))
+            args_list = [
+                (
+                    sol,
+                    vae_state, rnn_state,
+                    cfg.env, cfg.vae, cfg.rnn, cfg.controller,
+                    cfg.seed + gen * cfg.controller.pop_size + i,
+                )
+                for i, sol in enumerate(solutions)
+            ]
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn(f"[cyan]Gen {gen+1}/{cfg.controller.n_generations}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TimeElapsedColumn(),
-            console=console,
-            transient=True,
-        ) as progress:
-            task = progress.add_task("eval", total=len(solutions))
+            rewards   = np.zeros(len(solutions))
+            n_workers = min(cfg.controller.n_workers, len(solutions))
+
             if n_workers > 1:
                 with ProcessPoolExecutor(max_workers=n_workers) as executor:
                     futures = {executor.submit(_evaluate_params, a): i for i, a in enumerate(args_list)}
                     for fut in as_completed(futures):
                         i = futures[fut]
                         rewards[i] = fut.result()
-                        progress.advance(task)
             else:
                 for i, a in enumerate(args_list):
                     rewards[i] = _evaluate_params(a)
-                    progress.advance(task)
 
-        # CMA-ES minimises — negate rewards to turn maximisation into minimisation
-        es.tell(solutions, (-rewards).tolist())
+            # CMA-ES minimises — negate rewards to turn maximisation into minimisation
+            es.tell(solutions, (-rewards).tolist())
 
-        mean_r = rewards.mean()
-        max_r  = rewards.max()
-        logger.update(mean_reward=mean_r, max_reward=max_r)
-        logger.print_epoch(gen + 1, cfg.controller.n_generations)
+            mean_r = rewards.mean()
+            max_r  = rewards.max()
+            logger.update(mean_reward=mean_r, max_reward=max_r)
+            logger.print_epoch(gen + 1, n_gens)
 
-        # ── Save best ─────────────────────────────────────────────────────────
-        best_idx = np.argmax(rewards)
-        if max_r > best_reward:
-            best_reward = max_r
-            ctrl.set_params(solutions[best_idx])
-            save_checkpoint(
-                {
-                    "generation":  gen + 1,
-                    "model":       ctrl.state_dict(),
-                    "params":      solutions[best_idx],
-                    "best_reward": best_reward,
-                },
-                cfg.paths.controller_checkpoint,
-            )
-            console.print(f"  [green]✓ Best controller saved (reward={best_reward:.2f})")
+            # ── Save best ─────────────────────────────────────────────────────
+            best_idx = np.argmax(rewards)
+            if max_r > best_reward:
+                best_reward = max_r
+                ctrl.set_params(solutions[best_idx])
+                save_checkpoint(
+                    {
+                        "generation":  gen + 1,
+                        "model":       ctrl.state_dict(),
+                        "params":      solutions[best_idx],
+                        "best_reward": best_reward,
+                    },
+                    cfg.paths.controller_checkpoint,
+                )
+                console.print(f"  [green]✓ Best controller saved (reward={best_reward:.2f})")
 
-        if es.stop():
-            console.print("[yellow]CMA-ES converged early.")
-            break
+            progress.update(gen_task, status=f"Gen {gen+1}/{n_gens} — best={best_reward:.1f}")
+            progress.advance(gen_task)
+
+            if es.stop():
+                console.print("[yellow]CMA-ES converged early.")
+                break
 
     logger.save()
     console.print(f"[bold green]Controller training complete. Best reward: {best_reward:.2f}")

@@ -72,8 +72,8 @@ The environment is simulated with Box2D physics. A `frame_skip` of 4 is used —
 ## Setup
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -92,8 +92,8 @@ world/
 ├── training/               # Training loops for V, M, C
 ├── evaluation/             # Run the agent in the real environment
 ├── visualization/          # 6 interactive visualization panels
-├── checkpoints/            # Saved model weights
-├── logs/                   # Training histories
+├── checkpoint/             # Saved model weights
+├── log/                    # Training histories
 └── main.py                 # CLI entry point
 ```
 
@@ -185,7 +185,7 @@ Realistic expectations for this implementation:
 
 | Training scale | Approximate score |
 | --- | --- |
-| Quick (5 gens, 10 rollouts) | −50 to 200 |
+| Quick (5 gens, 15 rollouts) | −50 to 200 |
 | Default (50 gens, 200 rollouts) | 300 – 600 |
 | Extended (100+ gens, 500+ rollouts) | 700 – 850 |
 | Paper (200 gens, 10k rollouts, 64 workers) | **906 ± 21** |
