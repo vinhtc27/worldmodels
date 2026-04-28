@@ -20,8 +20,8 @@ console = Console()
 
 
 def preprocess_frame(frame: np.ndarray, size: int) -> np.ndarray:
-    """Resize frame to [size×size] and return as float32 in [0,1]."""
-    return cv2.resize(frame, (size, size), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
+    """Resize frame to [size×size] and return as uint8."""
+    return cv2.resize(frame, (size, size), interpolation=cv2.INTER_LINEAR)
 
 
 class _CarRacingPolicy:
@@ -59,7 +59,7 @@ def _collect_one(args):
     from pathlib import Path
 
     def _preprocess(frame, size):
-        return cv2.resize(frame, (size, size), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
+        return cv2.resize(frame, (size, size), interpolation=cv2.INTER_LINEAR)
 
     env = gym.make(env_name, render_mode=render_mode,
                    max_episode_steps=max_steps * frame_skip)
@@ -104,7 +104,7 @@ def _collect_one(args):
     path = Path(save_dir) / f"rollout_{idx:05d}.npz"
     np.savez(
         path,
-        obs=np.array(obs_list, dtype=np.float32),
+        obs=np.array(obs_list, dtype=np.uint8),
         actions=np.array(act_list, dtype=np.float32),
         rewards=np.array(rew_list, dtype=np.float32),
         dones=np.array(done_list, dtype=bool),

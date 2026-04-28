@@ -44,7 +44,7 @@ def _build_frame_cache(paths: List[str], out_path: Path) -> None:
     for p in paths:
         obs = np.load(p)["obs"]
         n = len(obs)
-        out[offset : offset + n] = obs
+        out[offset : offset + n] = obs.astype(np.float32) / 255.0
         offset += n
         del obs
     del out  # flush to disk
@@ -113,7 +113,7 @@ class SequenceDataset(Dataset):
         obs, acts = self.windows[idx]
         obs = obs.transpose(0, 3, 1, 2)  # [T+1, H, W, C] → [T+1, C, H, W]
         return (
-            torch.from_numpy(obs.astype(np.float32)),
+            torch.from_numpy(obs.astype(np.float32) / 255.0),
             torch.from_numpy(acts.astype(np.float32)),
         )
 

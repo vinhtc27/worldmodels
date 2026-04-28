@@ -40,7 +40,7 @@ def encode_and_save_rollouts(vae: VAE, cfg, tag: str = "train"):
         batch_size = 512
         for start in range(0, T, batch_size):
             batch = obs[start : start + batch_size]
-            x = torch.from_numpy(batch.transpose(0, 3, 1, 2)).to(device, non_blocking=True)
+            x = torch.from_numpy((batch.astype(np.float32) / 255.0).transpose(0, 3, 1, 2)).to(device, non_blocking=True)
             with torch.no_grad(), torch.autocast(device_type=device, dtype=amp_dtype, enabled=use_amp):
                 mu, _ = vae.encode(x)
             z_list.append(mu.float().cpu().numpy())  # store as float32
