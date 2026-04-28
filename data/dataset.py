@@ -17,24 +17,68 @@ from pathlib import Path
 from typing import List
 
 
+def _build_frame_cache(paths: List[str], out_path: Path) -> None:
+    """
+    Consolidate all rollout obs arrays into a single memory-mapped .npy file.
+    Two streaming passes — peak RAM is one rollout's obs at a time (~12 MB).
+    The resulting file supports O(1) random frame access via mmap.
+    Regenerated automatically if any source rollout is newer than the cache.
+    """
+    from rich.console import Console
+    console = Console()
+
+    # Pass 1: total count + shape (one array in RAM at a time)
+    total, shape = 0, None
+    for p in paths:
+        obs = np.load(p)["obs"]
+        total += len(obs)
+        if shape is None:
+            shape = obs.shape[1:]
+
+    console.print(f"[cyan]Building frame cache: {total:,} frames → {out_path.name} ...")
+
+    # Pass 2: stream each obs into the mmap file
+    out = np.lib.format.open_memmap(str(out_path), mode="w+", dtype=np.float32,
+                                    shape=(total,) + shape)
+    offset = 0
+    for p in paths:
+        obs = np.load(p)["obs"]
+        n = len(obs)
+        out[offset : offset + n] = obs
+        offset += n
+        del obs
+    del out  # flush to disk
+    console.print(f"[green]Frame cache ready ({total:,} frames).")
+
+
 class FrameDataset(Dataset):
     """
     Flat dataset of individual frames for VAE training.
-    Loads all rollouts into memory, converts HWC → CHW.
+
+    On first use (or when rollouts are newer than the cache), all obs arrays
+    are consolidated into data/rollouts/train/all_obs.npy — a single
+    memory-mapped file. Subsequent runs skip this step and mmap the file
+    directly, so RAM usage stays near zero regardless of dataset size.
     """
     def __init__(self, rollout_paths: List[str]):
-        self.frames = []
-        for p in rollout_paths:
-            d = np.load(p)
-            self.frames.append(d["obs"])  # [T, H, W, C]
-        self.frames = np.concatenate(self.frames, axis=0)  # [N, H, W, C]
+        paths = list(rollout_paths)
+        if not paths:
+            self._obs = np.empty((0, 64, 64, 3), dtype=np.float32)
+            return
+
+        out_path = Path(paths[0]).parent / "all_obs.npy"
+        newest_rollout = max(Path(p).stat().st_mtime for p in paths)
+        if not out_path.exists() or out_path.stat().st_mtime < newest_rollout:
+            _build_frame_cache(paths, out_path)
+
+        self._obs = np.load(str(out_path), mmap_mode="r")
 
     def __len__(self):
-        return len(self.frames)
+        return len(self._obs)
 
     def __getitem__(self, idx):
-        # Convert HWC → CHW; frames are already float32 in [0, 1]
-        frame = self.frames[idx].transpose(2, 0, 1)
+        # .copy() required: mmap arrays are read-only, torch.from_numpy needs writable
+        frame = self._obs[idx].transpose(2, 0, 1).copy()
         return torch.from_numpy(frame)
 
 

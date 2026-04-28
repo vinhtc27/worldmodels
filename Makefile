@@ -1,4 +1,4 @@
-.PHONY: help install clean clean-checkpoints clean-data clean-logs clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves research
+.PHONY: help install clean clean-checkpoints clean-data clean-logs clean-research clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves research
 
 PYTHON = .venv/bin/python
 VENV   = .venv
@@ -11,10 +11,11 @@ help:
 	@echo ""
 	@echo "  Setup"
 	@echo "    make install          Install dependencies into venv"
-	@echo "    make clean            Remove all generated files (checkpoints, logs, data)"\
-	@echo "    make clean-checkpoints  Remove only model checkpoints (.pt files)"\
-	@echo "    make clean-data       Remove only collected rollouts"\
+	@echo "    make clean            Remove all generated files (checkpoints, logs, data, research)"
+	@echo "    make clean-checkpoints  Remove only model checkpoints (.pt files)"
+	@echo "    make clean-data       Remove only collected rollouts"
 	@echo "    make clean-logs       Remove only training logs"
+	@echo "    make clean-research   Remove only research/ output folder"
 	@echo "    make clean-all        Remove everything including venv"
 	@echo ""
 	@echo "  Quick runs"
@@ -58,7 +59,7 @@ install:
 	$(VENV)/bin/pip install -r requirements.txt
 	@echo "Done. Activate with: source .venv/bin/activate"
 
-clean: clean-checkpoints clean-data clean-logs
+clean: clean-checkpoints clean-data clean-logs clean-research
 	@echo "All generated files removed."
 
 clean-checkpoints:
@@ -72,6 +73,10 @@ clean-data:
 clean-logs:
 	rm -rf logs/*
 	@echo "Logs removed."
+
+clean-research:
+	rm -rf $(RESEARCH_DIR)
+	@echo "Research outputs removed."
 
 clean-all: clean
 	rm -rf $(VENV)
@@ -129,7 +134,7 @@ research:
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-vae --epochs 1
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-rnn --epochs 20
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64 --n-workers 4
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) eval --episodes 100
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel vae_reconstruction --save $(RESEARCH_DIR)/viz_reconstruction.png
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel latent_space       --save $(RESEARCH_DIR)/viz_latent.png

@@ -21,36 +21,33 @@ def encode_and_save_rollouts(vae: VAE, cfg, tag: str = "train"):
     After VAE training: encode all rollouts to latent z and save alongside originals.
     This speeds up MDN-RNN training significantly.
     """
-    from data import get_rollout_paths, preprocess_frame
+    from data import get_rollout_paths
     import numpy as np
 
     device = cfg.get_device()
     vae = vae.to(device).eval()
-    paths = get_rollout_paths(cfg, tag)
+    use_amp  = device in ("cuda", "mps")
+    amp_dtype = torch.float16 if device == "cuda" else torch.bfloat16
 
+    paths = get_rollout_paths(cfg, tag)
     console.print(f"[cyan]Encoding {len(paths)} rollouts to latent space...")
+
     for p in paths:
         d = np.load(p)
         obs = d["obs"]  # [T, H, W, C]
         T = len(obs)
         z_list = []
-        batch_size = 128
+        batch_size = 512
         for start in range(0, T, batch_size):
             batch = obs[start : start + batch_size]
-            x = torch.from_numpy(batch.transpose(0, 3, 1, 2)).to(device)  # [B, C, H, W]
-            with torch.no_grad():
+            x = torch.from_numpy(batch.transpose(0, 3, 1, 2)).to(device, non_blocking=True)
+            with torch.no_grad(), torch.autocast(device_type=device, dtype=amp_dtype, enabled=use_amp):
                 mu, _ = vae.encode(x)
-            z_list.append(mu.cpu().numpy())
+            z_list.append(mu.float().cpu().numpy())  # store as float32
         z = np.concatenate(z_list, axis=0)
-        # Save new file alongside original
         out_path = Path(p).parent / (Path(p).stem + "_encoded.npz")
-        np.savez_compressed(
-            out_path,
-            z=z,
-            actions=d["actions"],
-            rewards=d["rewards"],
-            dones=d["dones"],
-        )
+        np.savez(out_path, z=z, actions=d["actions"], rewards=d["rewards"], dones=d["dones"])
+
     console.print(f"[green]Encoded rollouts saved.")
 
 
@@ -58,6 +55,13 @@ def train_vae(cfg, resume: bool = False):
     set_seed(cfg.seed)
     device = cfg.get_device()
     console.print(f"[bold]Training VAE[/] on [cyan]{device}[/]")
+
+    if device == "cuda":
+        torch.set_float32_matmul_precision("high")  # TF32 on Ampere+
+        torch.backends.cudnn.benchmark = True  # auto-tune conv algorithms for fixed 64×64 input
+    use_amp  = device in ("cuda", "mps")
+    amp_dtype = torch.float16 if device == "cuda" else torch.bfloat16
+    scaler   = torch.amp.GradScaler("cuda") if device == "cuda" else None
 
     # ── Data ─────────────────────────────────────────────────────────────────
     paths = get_rollout_paths(cfg, "train")
@@ -71,7 +75,7 @@ def train_vae(cfg, resume: bool = False):
         dataset, [len(dataset) - val_size, val_size],
         generator=torch.Generator().manual_seed(cfg.seed),
     )
-    num_workers = min((os.cpu_count() or 4) // 2, 4)  # data loading is not the bottleneck; more workers waste RAM and contend with training
+    num_workers = min(os.cpu_count() or 4, 8)
     train_loader = DataLoader(train_ds, batch_size=cfg.vae.batch_size, shuffle=True,
                               num_workers=num_workers, pin_memory=True,
                               persistent_workers=num_workers > 0)
@@ -81,6 +85,8 @@ def train_vae(cfg, resume: bool = False):
 
     # ── Model ─────────────────────────────────────────────────────────────────
     vae = VAE(cfg.vae).to(device)
+    if device == "cuda":
+        vae = torch.compile(vae)  # Triton kernel fusion; first epoch slower while compiling
     print_model_summary("VAE", vae)
     optimizer = torch.optim.Adam(vae.parameters(), lr=cfg.vae.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.vae.epochs)
@@ -111,12 +117,18 @@ def train_vae(cfg, resume: bool = False):
         ) as progress:
             task = progress.add_task("train", total=len(train_loader))
             for x in train_loader:
-                x = x.to(device)
-                recon, mu, logvar, _ = vae(x)
-                loss, recon_l, kl_l = vae.loss(x, recon, mu, logvar)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                x = x.to(device, non_blocking=True)
+                with torch.autocast(device_type=device, dtype=amp_dtype, enabled=use_amp):
+                    recon, mu, logvar, _ = vae(x)
+                    loss, recon_l, kl_l = vae.loss(x, recon, mu, logvar)
+                optimizer.zero_grad(set_to_none=True)
+                if scaler:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
                 logger.update(loss=loss, recon=recon_l, kl=kl_l)
                 progress.advance(task)
 
@@ -125,9 +137,10 @@ def train_vae(cfg, resume: bool = False):
         val_loss = 0.0
         with torch.no_grad():
             for x in val_loader:
-                x = x.to(device)
-                recon, mu, logvar, _ = vae(x)
-                l, _, _ = vae.loss(x, recon, mu, logvar)
+                x = x.to(device, non_blocking=True)
+                with torch.autocast(device_type=device, dtype=amp_dtype, enabled=use_amp):
+                    recon, mu, logvar, _ = vae(x)
+                    l, _, _ = vae.loss(x, recon, mu, logvar)
                 val_loss += l.item()
         val_loss /= len(val_loader)
         logger.update(val_loss=val_loss)

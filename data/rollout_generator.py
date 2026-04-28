@@ -5,7 +5,7 @@ Each rollout: obs [T, H, W, C], actions [T, A], rewards [T], dones [T]
 import os
 import numpy as np
 import gymnasium as gym
-from PIL import Image
+import cv2
 from pathlib import Path
 from typing import Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -21,8 +21,7 @@ console = Console()
 
 def preprocess_frame(frame: np.ndarray, size: int) -> np.ndarray:
     """Resize frame to [size×size] and return as float32 in [0,1]."""
-    img = Image.fromarray(frame).resize((size, size), Image.BILINEAR)
-    return np.array(img, dtype=np.float32) / 255.0
+    return cv2.resize(frame, (size, size), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
 
 
 class _CarRacingPolicy:
@@ -56,12 +55,11 @@ def _collect_one(args):
 
     import numpy as np
     import gymnasium as gym
-    from PIL import Image
+    import cv2
     from pathlib import Path
 
     def _preprocess(frame, size):
-        img = Image.fromarray(frame).resize((size, size), Image.BILINEAR)
-        return np.array(img, dtype=np.float32) / 255.0
+        return cv2.resize(frame, (size, size), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
 
     env = gym.make(env_name, render_mode=render_mode,
                    max_episode_steps=max_steps * frame_skip)
@@ -104,7 +102,7 @@ def _collect_one(args):
             break
 
     path = Path(save_dir) / f"rollout_{idx:05d}.npz"
-    np.savez_compressed(
+    np.savez(
         path,
         obs=np.array(obs_list, dtype=np.float32),
         actions=np.array(act_list, dtype=np.float32),

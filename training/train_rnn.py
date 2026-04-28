@@ -36,6 +36,13 @@ def train_rnn(cfg, resume: bool = False):
     device = cfg.get_device()
     console.print(f"[bold]Training MDN-RNN[/] on [cyan]{device}[/]")
 
+    if device == "cuda":
+        torch.set_float32_matmul_precision("high")  # TF32 on Ampere+
+        torch.backends.cudnn.benchmark = True
+    use_amp   = device in ("cuda", "mps")
+    amp_dtype = torch.float16 if device == "cuda" else torch.bfloat16
+    scaler    = torch.amp.GradScaler("cuda") if device == "cuda" else None
+
     # ── Data ─────────────────────────────────────────────────────────────────
     paths = [str(p) for p in get_encoded_paths(cfg, "train")]
     if not paths:
@@ -48,7 +55,7 @@ def train_rnn(cfg, resume: bool = False):
         dataset, [len(dataset) - val_size, val_size],
         generator=torch.Generator().manual_seed(cfg.seed),
     )
-    num_workers = min((os.cpu_count() or 4) // 2, 4)  # data loading is not the bottleneck; more workers waste RAM and contend with training
+    num_workers = min(os.cpu_count() or 4, 8)
     train_loader = DataLoader(train_ds, batch_size=cfg.rnn.batch_size, shuffle=True,
                               num_workers=num_workers, pin_memory=True,
                               persistent_workers=num_workers > 0)
@@ -59,7 +66,9 @@ def train_rnn(cfg, resume: bool = False):
     console.print(f"  Train windows: {len(train_ds)}  |  Val windows: {len(val_ds)}")
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    rnn       = MDNRNN(cfg.rnn).to(device)
+    rnn = MDNRNN(cfg.rnn).to(device)
+    if device == "cuda":
+        rnn = torch.compile(rnn)
     print_model_summary("MDN-RNN", rnn)
     optimizer = torch.optim.Adam(rnn.parameters(), lr=cfg.rnn.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.rnn.epochs)
@@ -90,22 +99,29 @@ def train_rnn(cfg, resume: bool = False):
         ) as progress:
             task = progress.add_task("train", total=len(train_loader))
             for z_seq, a_seq in train_loader:
-                z_seq = z_seq.to(device)  # [B, T+1, D]
-                a_seq = a_seq.to(device)  # [B, T+1, A]
+                z_seq = z_seq.to(device, non_blocking=True)  # [B, T+1, D]
+                a_seq = a_seq.to(device, non_blocking=True)  # [B, T+1, A]
 
                 # Next-step prediction: feed z_t and a_t, predict z_{t+1}
                 z_in   = z_seq[:, :-1, :]  # [B, T, D] — inputs
                 z_next = z_seq[:, 1:,  :]  # [B, T, D] — targets
                 a_in   = a_seq[:, :-1, :]  # [B, T, A]
 
-                log_pi, mu, sigma, _ = rnn(z_in, a_in)
-                loss = rnn.mdn_loss(z_next, log_pi, mu, sigma)
+                with torch.autocast(device_type=device, dtype=amp_dtype, enabled=use_amp):
+                    log_pi, mu, sigma, _ = rnn(z_in, a_in)
+                    loss = rnn.mdn_loss(z_next, log_pi, mu, sigma)
 
-                optimizer.zero_grad()
-                loss.backward()
-                # Gradient clipping prevents exploding gradients in BPTT
-                torch.nn.utils.clip_grad_norm_(rnn.parameters(), cfg.rnn.grad_clip)
-                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                if scaler:
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(rnn.parameters(), cfg.rnn.grad_clip)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(rnn.parameters(), cfg.rnn.grad_clip)
+                    optimizer.step()
 
                 logger.update(loss=loss)
                 progress.advance(task)
@@ -115,13 +131,14 @@ def train_rnn(cfg, resume: bool = False):
         val_loss = 0.0
         with torch.no_grad():
             for z_seq, a_seq in val_loader:
-                z_seq  = z_seq.to(device)
-                a_seq  = a_seq.to(device)
+                z_seq  = z_seq.to(device, non_blocking=True)
+                a_seq  = a_seq.to(device, non_blocking=True)
                 z_in   = z_seq[:, :-1, :]
                 z_next = z_seq[:, 1:,  :]
                 a_in   = a_seq[:, :-1, :]
-                log_pi, mu, sigma, _ = rnn(z_in, a_in)
-                val_loss += rnn.mdn_loss(z_next, log_pi, mu, sigma).item()
+                with torch.autocast(device_type=device, dtype=amp_dtype, enabled=use_amp):
+                    log_pi, mu, sigma, _ = rnn(z_in, a_in)
+                    val_loss += rnn.mdn_loss(z_next, log_pi, mu, sigma).item()
         val_loss /= len(val_loader)
         logger.update(val_loss=val_loss)
 

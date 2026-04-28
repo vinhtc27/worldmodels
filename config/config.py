@@ -33,7 +33,7 @@ class VAEConfig:
     # Encoder conv channels — each doubles filters, halves spatial dims
     enc_channels:  list  = field(default_factory=lambda: [32, 64, 128, 256])
     # Training
-    batch_size:    int   = 64
+    batch_size:    int   = 256  # float16 + 8GB VRAM → safe headroom; was 64
     lr:            float = 1e-4
     epochs:        int   = 10
     kl_weight:     float = 1.0   # β in β-VAE (β=1 → standard VAE)
@@ -53,7 +53,7 @@ class RNNConfig:
     latent_dim:    int   = 32    # must match VAEConfig.latent_dim
     action_dim:    int   = 3     # CarRacing: [steer, gas, brake]
     # Training
-    batch_size:    int   = 32
+    batch_size:    int   = 128  # float16 + 8GB VRAM; was 32
     seq_len:       int   = 32    # BPTT truncation length
     lr:            float = 1e-3
     epochs:        int   = 20
