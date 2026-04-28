@@ -73,7 +73,7 @@ class ControllerConfig:
     pop_size:         int   = 16    # population size (paper uses 64; ≥4 required)
     n_generations:    int   = 50    # generations to run (paper uses 200+)
     sigma0:           float = 0.1   # initial search radius in parameter space
-    n_eval_episodes:  int   = 4     # episodes per candidate (more = less noisy fitness)
+    n_eval_episodes:  int   = 4     # episodes per candidate (paper uses 16; 4 ok for quick runs)
     n_workers:        int   = field(default_factory=lambda: os.cpu_count() or 4)  # parallel worker processes (set 1 to disable)
 
 

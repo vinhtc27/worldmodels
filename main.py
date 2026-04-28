@@ -92,10 +92,11 @@ def build_parser():
 
     # ── train-ctrl ────────────────────────────────────────────────────────────
     p_ctrl = sub.add_parser("train-ctrl", help="Train the Controller (CMA-ES)")
-    p_ctrl.add_argument("--generations", type=int,   default=None)
-    p_ctrl.add_argument("--pop-size",    type=int,   default=None)
-    p_ctrl.add_argument("--n-workers",   type=int,   default=None)
-    p_ctrl.add_argument("--resume",      action="store_true")
+    p_ctrl.add_argument("--generations",    type=int,   default=None)
+    p_ctrl.add_argument("--pop-size",       type=int,   default=None)
+    p_ctrl.add_argument("--n-workers",      type=int,   default=None)
+    p_ctrl.add_argument("--n-eval-episodes",type=int,   default=None)
+    p_ctrl.add_argument("--resume",         action="store_true")
 
     # ── eval ──────────────────────────────────────────────────────────────────
     p_eval = sub.add_parser("eval", help="Evaluate the full pipeline")
@@ -191,9 +192,10 @@ def apply_overrides(cfg, args):
         if args.hidden_size:  cfg.rnn.hidden_size = args.hidden_size
         if args.n_gaussians:  cfg.rnn.n_gaussians = args.n_gaussians
     elif cmd == "train-ctrl":
-        if args.generations: cfg.controller.n_generations = args.generations
-        if args.pop_size:    cfg.controller.pop_size       = args.pop_size
-        if args.n_workers:   cfg.controller.n_workers      = args.n_workers
+        if args.generations:     cfg.controller.n_generations  = args.generations
+        if args.pop_size:        cfg.controller.pop_size        = args.pop_size
+        if args.n_workers:       cfg.controller.n_workers       = args.n_workers
+        if args.n_eval_episodes: cfg.controller.n_eval_episodes = args.n_eval_episodes
     elif cmd == "all":
         if args.n_rollouts:  cfg.env.n_rollouts            = args.n_rollouts
         if args.vae_epochs:  cfg.vae.epochs                = args.vae_epochs

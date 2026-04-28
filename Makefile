@@ -36,7 +36,7 @@ help:
 	@echo ""
 	@echo "  Research (paper-scale)"
 	@echo "    make research         Full pipeline at Ha & Schmidhuber scale:"
-	@echo "                          10k rollouts | VAE 1ep | RNN 20ep | CMA-ES 1800gen×pop64"
+	@echo "                          10k rollouts | VAE 1ep | RNN 20ep | CMA-ES 1800gen×pop64×16eval"
 	@echo "                          All outputs saved to research/ (override: RESEARCH_DIR=path)"
 	@echo ""
 	@echo "  Evaluate"
@@ -134,7 +134,7 @@ research:
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-vae --epochs 1
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-rnn --epochs 20
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64 --n-eval-episodes 16
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) eval --episodes 100
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel vae_reconstruction --save $(RESEARCH_DIR)/viz_reconstruction.png
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel latent_space       --save $(RESEARCH_DIR)/viz_latent.png
