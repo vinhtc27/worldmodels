@@ -18,7 +18,7 @@ class EnvConfig:
                                     # reduces decision frequency, speeds up training
     max_steps: int  = 1000          # episode cutoff (1000 steps × frame_skip=4 = 4000 frames)
     n_rollouts: int = 200           # random rollouts to collect for VAE/RNN training
-    n_workers:  int = 1             # parallel workers for rollout collection (1=sequential)
+    n_workers:  int = field(default_factory=lambda: os.cpu_count() or 4)  # parallel workers for rollout collection
     reward_cutoff: float = -100.0   # cut episode early if cumulative reward drops below this (paper: -100)
 
     # Render window size (used during eval --render)

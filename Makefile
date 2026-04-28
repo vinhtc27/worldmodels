@@ -122,7 +122,7 @@ quick-rnn:
 	$(PYTHON) main.py train-rnn --epochs 3
 
 quick-ctrl:
-	$(PYTHON) main.py train-ctrl --generations 5 --pop-size 4 --n-workers 1
+	$(PYTHON) main.py train-ctrl --generations 5 --pop-size 4
 
 train: train-vae train-rnn train-ctrl
 
@@ -131,7 +131,7 @@ train: train-vae train-rnn train-ctrl
 RESEARCH_DIR ?= research
 
 research:
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000 --n-workers 4
+	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-vae --epochs 1
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-rnn --epochs 20
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64 --n-eval-episodes 16
