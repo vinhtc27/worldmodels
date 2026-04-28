@@ -56,7 +56,7 @@ def _load_all(cfg, device):
 
 
 def _frame_to_tensor(frame: np.ndarray, size: int, device: str) -> torch.Tensor:
-    f = preprocess_frame(frame, size)
+    f = preprocess_frame(frame, size).astype(np.float32) / 255.0
     return torch.from_numpy(f.transpose(2, 0, 1)).unsqueeze(0).to(device)
 
 
@@ -81,7 +81,7 @@ def vae_reconstruction(cfg, n_samples: int = 8, save_path: Optional[str] = None)
     idxs = np.random.choice(len(obs), n_samples, replace=False)
     frames = obs[idxs]  # [N, H, W, C]
 
-    x = torch.from_numpy(frames.transpose(0, 3, 1, 2)).to(device)
+    x = torch.from_numpy((frames.astype(np.float32) / 255.0).transpose(0, 3, 1, 2)).to(device)
     with torch.no_grad():
         recon, mu, logvar, z = vae(x)
 
@@ -137,7 +137,7 @@ def latent_space_pca(cfg, n_rollouts: int = 5, save_path: Optional[str] = None):
         d = np.load(p)
         obs = d["obs"]
         rewards = d["rewards"]
-        x = torch.from_numpy(obs.transpose(0, 3, 1, 2)).to(device)
+        x = torch.from_numpy((obs.astype(np.float32) / 255.0).transpose(0, 3, 1, 2)).to(device)
         with torch.no_grad():
             mu, _ = vae.encode(x)
         all_z.append(mu.cpu().numpy())
@@ -194,7 +194,7 @@ def rnn_dream(cfg, n_steps: int = 200, temperature: float = 1.0,
     paths = get_rollout_paths(cfg, "train")
     d = np.load(paths[np.random.randint(len(paths))])
     seed_frame = d["obs"][0]
-    x0 = torch.from_numpy(seed_frame.transpose(2, 0, 1)).unsqueeze(0).to(device)
+    x0 = torch.from_numpy((seed_frame.astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
 
     with torch.no_grad():
         z = vae.get_latent(x0)
@@ -322,7 +322,7 @@ def rollout_replay(cfg, rollout_idx: int = 0, save_gif: Optional[str] = None):
     T = len(obs)
 
     # Encode all frames
-    x_all = torch.from_numpy(obs.transpose(0, 3, 1, 2)).to(device)
+    x_all = torch.from_numpy((obs.astype(np.float32) / 255.0).transpose(0, 3, 1, 2)).to(device)
     with torch.no_grad():
         z_all, logvar_all = vae.encode(x_all)
         recon_all = vae.decode(z_all)
@@ -403,8 +403,8 @@ def latent_walk(cfg, n_steps: int = 60, save_gif: Optional[str] = None):
     obs = d["obs"]
     rng = np.random.default_rng()
     i1, i2 = rng.choice(len(obs), 2, replace=False)
-    x1 = torch.from_numpy(obs[i1].transpose(2, 0, 1)).unsqueeze(0).to(device)
-    x2 = torch.from_numpy(obs[i2].transpose(2, 0, 1)).unsqueeze(0).to(device)
+    x1 = torch.from_numpy((obs[i1].astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
+    x2 = torch.from_numpy((obs[i2].astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
 
     with torch.no_grad():
         z1 = vae.get_latent(x1)
