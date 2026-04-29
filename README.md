@@ -14,7 +14,7 @@ The paper proposes that intelligent agents build an internal model of their envi
 - **M (Memory)** — an MDN-RNN that learns the dynamics of the environment: given the current state and action, what comes next?
 - **C (Controller)** — a minimal linear controller that maps the agent's internal state `(z, h)` directly to actions, trained with evolutionary search (CMA-ES)
 
-See the [**How It Works**](#how-it-works) section below for detailed explanations of the V, M, and C components and the differences between dream and real-env controller training.
+See the [**How It Works**](#how-it-works) section below for detailed explanations of the V, M, and C components.
 
 ---
 
@@ -52,10 +52,9 @@ world/
 ├── models/
 │   ├── vae.py              # V model
 │   ├── mdn_rnn.py          # M model
-│   ├── controller.py       # C model
-│   └── reward_model.py     # R model — (z, h, a) → r, used in dream mode
+│   └── controller.py       # C model
 ├── data/                   # Rollout collection and datasets
-├── training/               # Training loops for V, M, C, R
+├── training/               # Training loops for V, M, C
 ├── evaluation/             # Run the agent in the real environment
 ├── visualization/          # 6 interactive visualization panels
 ├── utils/                  # Shared helpers (checkpoint load/save)
@@ -89,7 +88,7 @@ python main.py quick --panel vae_reconstruction
 python main.py quick --full
 ```
 
-Runs the stronger preset (200 biased rollouts × 1000 steps → VAE 10 epochs → then the remaining steps in `quick --full`) and opens a live game window at the end. Controller trains in dream mode by default — no real env needed for CMA-ES.
+Runs the stronger preset (200 biased rollouts × 1000 steps → VAE 10 epochs → RNN 20 epochs → CMA-ES 50 gens × pop 16 × 4 eval) and opens a live game window at the end.
 
 ### Skip steps already completed
 
@@ -109,8 +108,8 @@ python main.py all
 python main.py collect --n-rollouts 500
 python main.py train-vae --epochs 20
 python main.py train-rnn --epochs 30
-python main.py train-ctrl --generations 100 --pop-size 16 --n-workers 4   # dream mode (default)
-python main.py train-ctrl --generations 100 --pop-size 16 --real-env      # real environment
+python main.py train-ctrl --generations 100 --pop-size 16 --n-workers 4
+python main.py train-ctrl --generations 100 --pop-size 16 --resume   # continue from checkpoint
 ```
 
 ### Evaluate
@@ -174,16 +173,15 @@ To reproduce, run `eval --episodes 100` — the mean reward is the leaderboard s
 
 ## This implementation's results
 
-| Training scale | Dream-env score | Real-env score |
-| --- | --- | --- |
-| Quick (200 biased rollouts, 50 gens × pop16 × 4 eval) | Pending benchmark | Pending benchmark |
-| Paper (10k random rollouts, 1800 gens × pop64 × 16 eval) | Pending benchmark | Pending benchmark |
+| Training scale | Score |
+| --- | --- |
+| Quick (200 biased rollouts, 50 gens × pop16 × 4 eval) | Pending benchmark |
+| Paper (10k random rollouts, 1800 gens × pop64 × 16 eval) | Pending benchmark |
 
 Fill these values from:
 
 ```bash
-python main.py eval --episodes 100 --controller-mode dream
-python main.py eval --episodes 100 --controller-mode real
+python main.py eval --episodes 100
 ```
 
 ---
@@ -212,18 +210,68 @@ Training happens in three sequential stages:
 1. Collect  →  rollout data from the environment (frames + actions)
 2. Train V  →  VAE learns to encode/decode frames into latent z
 3. Train M  →  MDN-RNN learns environment dynamics from encoded sequences
-4. Train C  →  CMA-ES evolves the controller (dream mode by default)
+4. Train C  →  CMA-ES evolves the controller in the real CarRacing environment
 ```
 
-**Dream mode (default):** The controller is evaluated entirely inside the learned world model — no real environment needed during controller training. A small reward model $R(z, h, a) \to \hat{r}$ is trained automatically on encoded rollouts (if missing), then CMA-ES evolves the controller by rolling out **C+M+R** in latent space. This is ~50× faster than real-env evaluation.
+Each CMA-ES candidate is evaluated by running full CarRacing episodes: the VAE encodes each frame to `z`, the RNN maintains hidden state `h`, the controller maps `(z, h) → action`, and the environment returns ground-truth rewards.
 
-**Real-env mode (`--real-env`):** The original approach — run full CarRacing episodes, encode each frame via V, maintain hidden state via M, and use ground-truth rewards. Slower but uses no learned reward approximation.
+### Hallucinating Future Trajectories
 
-### Mathematical Formulation (Paper + This Implementation)
+Once V and M are trained, the agent can *dream* — generating plausible futures entirely in latent space, without ever touching the real environment. This is the world model's internal simulation: the RNN predicts what it *expects* to see next, and the VAE decoder renders those predictions back into pixel space.
+
+**How a dream sequence is generated:**
+
+```text
+seed frame x_0
+    │
+    ▼
+[VAE encoder] → z_0          (compress to 32-d latent)
+    │
+    └─▶ h_0 = zeros          (RNN starts with empty memory)
+
+for each step t:
+    (z_t, a_t, h_t) ──▶ [MDN-RNN] ──▶ π, μ, σ    (mixture of K Gaussians over z_{t+1})
+                                            │
+                                            ▼
+                                    sample z_{t+1} ~ MDN(π, μ, σ, τ)
+                                            │
+                                            ▼
+                                    [VAE decoder] → rendered frame
+```
+
+The action $a_t$ during dreaming is drawn uniformly at random — the agent imagines what would happen under a random policy. The RNN hidden state `h_t` accumulates across steps, so the dream is temporally coherent: early decisions affect what is imagined later.
+
+**Temperature τ and the quality of imagination:**
+
+The MDN does not output a single predicted $z_{t+1}$ — it outputs a mixture of $K=5$ Gaussians. Sampling from this mixture is controlled by temperature $\tau$:
+
+$$\tilde{\pi}_k \propto \pi_k^{1/\tau}, \qquad \tilde{\sigma}_k = \tau \cdot \sigma_k$$
+
+| τ | Effect |
+| --- | --- |
+| τ → 0 | Deterministic: always picks the dominant Gaussian mode. Dreams are sharp but repetitive. |
+| τ = 1 | Standard sampling. Dreams are realistic but varied. |
+| τ > 1 | Flattens the mixture: more uncertainty, more creative / chaotic dreams. |
+| τ = 1.15 | Default in this repo — slight stochasticity, matches paper's choice. |
+
+At low temperature the world model replays the most likely future. At high temperature it explores unlikely branches — the agent's imagination becomes unstable, blurring and distorting as compounding prediction errors accumulate over steps.
+
+**What the visualization shows:**
+
+The `rnn_dream` panel seeds the RNN with one real frame from a recorded rollout, then runs the dream loop for `--n-steps` steps (default 200). Left panel shows the real seed frame; right panel shows the hallucinated sequence with an interactive step slider. You can regenerate with a different random action sequence to see alternative futures from the same starting point.
+
+```bash
+python main.py viz --panel rnn_dream                        # interactive
+python main.py viz --panel rnn_dream --n-steps 300          # longer dream
+python main.py viz --panel rnn_dream --temperature 0.5      # sharper
+python main.py viz --panel rnn_dream --save dream.gif       # export GIF
+```
+
+**What good dreams look like:** After sufficient RNN training, the hallucinated frames should show recognizable track geometry — road curves, grass borders, the car — that evolves plausibly over time. Blurry or incoherent dreams indicate the RNN hasn't converged or the VAE latent space is poorly structured. The dream degrades gracefully over time as prediction errors compound, which is expected behaviour.
+
+### Mathematical Formulation
 
 Let observation be $x_t$, latent be $z_t$, action be $a_t$, and recurrent hidden state be $h_t$.
-
-The following equations formalize each component of the architecture and the training objectives used in this implementation.
 
 **VAE (V model):**
 
@@ -266,106 +314,7 @@ $$\theta^* = \arg\max_{\theta} \; \mathbb{E}_{\tau \sim p_\theta(\tau)}\left[\su
 - $\tau$ denotes a sampled trajectory, so $p_\theta(\tau)$ is the trajectory distribution induced by controller parameters $\theta$.
 - The sum $\sum_{t=0}^{T-1} r_t$ is the cumulative return over one rollout.
 
-In practice CMA-ES approximates this expectation by evaluating many rollouts per candidate $\theta$; the MDN-RNN sampling temperature $T_{\text{MDN}}$ affects the trajectory distribution $p_\theta(\tau)$ but is not a direct input to the reward model.
-
-**Dream-mode reward extension (CarRacing in this repo):**
-
-The original paper did not use dream-mode controller training for CarRacing. In this repo, dream mode adds a learned reward model:
-
-$$\hat{r}_t = R_\psi(z_t,\, h_t,\, a_t)$$
-
-- $R_\psi$ is the learned reward model. It takes the current latent $z_t$, hidden state $h_t$, and action $a_t$, then predicts the per-step reward $\hat{r}_t$.
-- The MDN-RNN still samples future latents with temperature $T_{\text{MDN}}$.
-
-### Dreaming
-
-Once V and M are trained, the agent can "dream" — rolling out latent futures in model space, bypassing the real environment. In the paper, dream training is demonstrated for VizDoom; in this repo we extend the idea to CarRacing by adding a learned reward model so the controller can be evaluated in latent space.
-
-Concretely, the reward model is a small MLP that maps $(z_t, h_t, a_t) \to r_t$. Training uses encoded rollouts: we run the frozen MDN-RNN forward to compute the hidden state *before* each step ($h_{\text{prev}}$), pair $(z, h_{\text{prev}}, a)$ with the recorded per-step reward, and optimize mean-squared error (MSE) with Adam. The training script batches samples (default batch size 512), holds out a small validation split, and saves the best checkpoint. Once trained, $R(z, h, a)$ supplies per-step rewards during dream rollouts while the MDN-RNN samples next latents (with configurable temperature $T_{\text{MDN}}$).
-
----
-
-## Controller Training Modes
-
-The controller can be trained in two fundamentally different ways. The choice affects what components are active during CMA-ES evaluation and where the reward signal comes from.
-
-### Real-env mode (`--real-env`)
-
-```text
-  ┌─────────────────── one step ────────────────────────────┐
-  │                                                         │
-  │  ┌──────────────┐  frame   ┌───────┐   z (32d)          │
-  │  │  Real Env    │─────────▶│  VAE  │──────────┐         │
-  │  │  (Box2D)     │          └───────┘          ▼         │
-  │  │              │                    ┌─────────────────┐│
-  │  │  env.step(a) │◀──── action ───────│   Controller    ││
-  │  │              │                    │    z ⊕ h → a    ││
-  │  └──────┬───────┘                    └─────────────────┘│
-  │         │                                     ▲         │
-  │         │ reward ✓             ┌───────┐   h  │         │
-  │         │ (ground truth)       │  RNN  │──────┘         │
-  │         │                      └───────┘                │
-  └─────────┴───────────────────────────────────────────────┘
-```
-
-At every step the real Box2D simulator produces a pixel frame. The VAE encodes it to `z`, the RNN maintains hidden state `h` across steps, the controller maps `(z, h) → action`, and the environment returns a ground-truth reward. The bottleneck is the physics simulator — each episode is seconds of wall time.
-
-**Pros:** Ground-truth reward; controller cannot exploit model inaccuracies.
-**Cons:** 1000 steps × frame_skip=4 × n_episodes × pop_size evaluations per generation — very slow.
-
-### Dream mode (default)
-
-```text
-  ┌─────────────────── one step ────────────────────────────┐
-  │                                                         │
-  │   z_t ──▶ ┌─────────────────┐                           │
-  │           │   Controller    │─── action ───┐            │
-  │   h_t ──▶ │    z ⊕ h → a    │              │            │
-  │           └─────────────────┘              │            │
-  │                                            ▼            │
-  │                                    ┌─────────────────┐  │
-  │                                    │  Reward Model   │  │
-  │                                    │  (z, h, a) → r̂  │  │
-  │                                    └─────────────────┘  │
-  │                                            │            │
-  │                               ┌──────────────────────┐  │
-  │                               │      RNN.sample()    │  │
-  │                               │ (z, a, h) → z', h'   │  │
-  │                               └────────────┬─────────┘  │
-  │                                            │            │
-  │               z_{t+1}, h_{t+1} ◀───────────┘(next step) │
-  └─────────────────────────────────────────────────────────┘
-```
-
-No real environment. No VAE. The RNN replaces the physics engine — given $(z_t, a_t, h_t)$ it samples the next latent $z_{t+1}$ from its learned MDN mixture. The reward model predicts $\hat{r}$ from the agent's internal state. Everything is pure tensor ops on CPU.
-
-**Pros:** ~50× faster — no physics, no rendering, no VAE inference per step.
-
-**Cons:** Reward is approximate; controller can exploit model imperfections. RNN temperature $T_{\text{MDN}} = 1.15$ adds stochasticity to the dream, making exploitation harder.
-
-### Architectural summary
-
-| | Real-env | Dream |
-| --- | --- | --- |
-| Real environment | ✓ (Box2D physics) | ✗ |
-| VAE (frame → z) | ✓ per step | ✗ (z from RNN) |
-| RNN (hidden state h) | ✓ memory only | ✓ dynamics + memory |
-| Reward model | ✗ | ✓ $R(z,h,a) \to \hat{r}$ |
-| Reward source | ground truth | learned approximation |
-| Speed per generation | slow (real episodes) | fast (tensor rollouts) |
-| Risk | none | model exploitation |
-
-### Why the paper's Dream mode doesn't directly apply to CarRacing
-
-The original paper implements dream training only for VizDoom (DoomTakeCover), not CarRacing. The reason is subtle: **the dream world needs a reward signal**, and the two tasks provide it very differently.
-
-In VizDoom the reward is simply survival time — the agent gets +1 for every frame it stays alive. The paper modifies the MDN-RNN to also predict a binary `done` signal (did the agent die this frame?). With that, the dream world has everything it needs: the full VizDoom dream loop is `RNN predicts (z_next, done)` — no reward model needed, just count steps until `done = True`.
-
-**CarRacing is harder.** The reward is continuous ($+1000/N$ per new tile crossed, $-0.1$ per frame), depends on track position, and has no clean binary signal the RNN can easily predict. The paper sidesteps this entirely by keeping CarRacing in the real environment.
-
-**Our solution — a learned reward model $R_\psi(z, h, a) \to \hat{r}$:** We train a small MLP on the encoded rollouts to approximate the per-step reward from the agent's internal state. This lets us bring dream training to CarRacing at the cost of reward approximation error. The paper also observes that using a higher MDN-RNN sampling temperature $T_{\text{MDN}}$ during dream rollouts can reduce exploitation of model errors and often yields controllers that generalize better to normal settings.
-
-The reward model is an extension beyond the paper. Use `--real-env` if you want to match the paper's exact CarRacing setup.
+In practice CMA-ES approximates this expectation by evaluating many rollouts per candidate $\theta$.
 
 ---
 
@@ -375,7 +324,6 @@ The reward model is an extension beyond the paper. Use `--real-env` if you want 
 - [DreamerV2](https://arxiv.org/abs/2010.02193) — Uses discrete latents (categorical VAE) for improved stability.
 - [DreamerV3](https://arxiv.org/abs/2301.04104) — A single general algorithm that achieves human-level performance across many domains.
 - [PlaNet](https://arxiv.org/abs/1811.04551) — Hafner et al., 2019. Planning with a learned latent dynamics model using CEM.
-- [RSSM](https://arxiv.org/abs/1811.04551) — Recurrent State Space Model, the dynamics backbone used in Dreamer.
 - [β-VAE](https://openreview.net/forum?id=Sy2fzU9gl) — Higgins et al., 2017. A generalization of VAE that learns disentangled representations by weighting the KL term.
 
 ---

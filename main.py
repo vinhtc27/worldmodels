@@ -105,10 +105,6 @@ def build_parser():
     p_ctrl.add_argument("--n-workers",      type=int,   default=None)
     p_ctrl.add_argument("--n-eval-episodes",type=int,   default=None)
     p_ctrl.add_argument("--resume",         action="store_true")
-    p_ctrl.add_argument(
-        "--real-env", action="store_true",
-        help="Evaluate in the real environment instead of the dream world (slower, no reward model needed)",
-    )
 
     # ── eval ──────────────────────────────────────────────────────────────────
     p_eval = sub.add_parser("eval", help="Evaluate the full pipeline")
@@ -119,8 +115,6 @@ def build_parser():
                         default=None, help="Render window size e.g. --window-size 600 600")
     p_eval.add_argument("--debug-action", type=float, nargs=3, metavar=("STEER", "GAS", "BRAKE"),
                         default=None, help="Override controller with a fixed action e.g. --debug-action 1.0 0.8 0.0")
-    p_eval.add_argument("--controller-mode", choices=["dream", "real"], default=None,
-                        help="Which controller checkpoint to use: 'dream' or 'real' (default: auto-detect)")
 
     # ── viz ───────────────────────────────────────────────────────────────────
     p_viz = sub.add_parser("viz", help="Interactive visualizations")
@@ -184,11 +178,9 @@ def apply_base_dir(cfg, base_dir: str):
     cfg.paths.data_dir              = str(base / "data" / "rollouts")
     cfg.paths.checkpoint_dir        = str(base / "checkpoint")
     cfg.paths.log_dir               = str(base / "log")
-    cfg.paths.vae_checkpoint                = str(base / "checkpoint" / "vae_best.pt")
-    cfg.paths.rnn_checkpoint                = str(base / "checkpoint" / "rnn_best.pt")
-    cfg.paths.controller_dream_checkpoint   = str(base / "checkpoint" / "controller_dream_best.pt")
-    cfg.paths.controller_real_checkpoint    = str(base / "checkpoint" / "controller_real_best.pt")
-    cfg.paths.reward_model_checkpoint       = str(base / "checkpoint" / "reward_model_best.pt")
+    cfg.paths.vae_checkpoint        = str(base / "checkpoint" / "vae_best.pt")
+    cfg.paths.rnn_checkpoint        = str(base / "checkpoint" / "rnn_best.pt")
+    cfg.paths.controller_checkpoint = str(base / "checkpoint" / "controller_best.pt")
     for d in (cfg.paths.data_dir, cfg.paths.checkpoint_dir, cfg.paths.log_dir):
         os.makedirs(d, exist_ok=True)
 
@@ -214,8 +206,6 @@ def apply_overrides(cfg, args):
         if args.pop_size:        cfg.controller.pop_size        = args.pop_size
         if args.n_workers:       cfg.controller.n_workers       = args.n_workers
         if args.n_eval_episodes: cfg.controller.n_eval_episodes = args.n_eval_episodes
-        if getattr(args, "real_env", False):
-            cfg.controller.dream_mode = False
     elif cmd == "all":
         if args.n_rollouts:  cfg.env.n_rollouts            = args.n_rollouts
         if args.vae_epochs:  cfg.vae.epochs                = args.vae_epochs
@@ -275,7 +265,7 @@ def cmd_eval(args, cfg):
         cfg.env.window_width, cfg.env.window_height = args.window_size
     console.print(Panel(f"Evaluating — [cyan]{args.episodes}[/] episodes"))
     evaluate(cfg, n_episodes=args.episodes, render=args.render, seed=args.seed,
-             debug_action=args.debug_action, controller_mode=args.controller_mode)
+             debug_action=args.debug_action)
 
 
 def cmd_viz(args, cfg):
@@ -331,7 +321,7 @@ def cmd_quick(args, cfg):
             "[bold green]Quick FULL pipeline[/]\n"
             "200 rollouts  |  biased collection  |  VAE 10 epochs  |  RNN 20 epochs  |  CMA-ES 50 gens × pop 16 × 4 eval\n"
             "[dim]Full quick run — better chance of reaching a meaningful policy[/]",
-            title="~3-6 hours on MacBook Pro M1 with end-to-end training",
+            title="~6 hours on MacBook Pro M1 with end-to-end training",
         ))
 
         console.rule("[bold cyan]1/5  Collect")

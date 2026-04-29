@@ -157,6 +157,7 @@ class MDNRNN(nn.Module):
         mu: torch.Tensor,
         sigma: torch.Tensor,
         temperature: float = 1.0,
+        use_mean: bool = False,
     ) -> torch.Tensor:
         """
         Sample z_next from the predicted mixture.
@@ -165,24 +166,29 @@ class MDNRNN(nn.Module):
           τ < 1 → concentrates mass on the highest-weight component (less random)
           τ > 1 → flattens the distribution (more exploratory dreams)
 
-        Then sample from the chosen Gaussian component.
+        use_mean=True → return the mean of the argmax component with no added
+        Gaussian noise. Produces sharper decoded frames for visualization because
+        stochastic noise in z-space compounds over many dream steps.
         """
         log_pi = log_pi.squeeze(1)  # [B, K]
         mu     = mu.squeeze(1)      # [B, K, D]
         sigma  = sigma.squeeze(1)   # [B, K, D]
 
-        # Select mixture component with temperature-scaled weights
-        pi  = torch.exp(log_pi / temperature)
-        pi /= pi.sum(dim=-1, keepdim=True)
-        idx = torch.multinomial(pi, 1).squeeze(-1)  # [B]
+        B, K, D = mu.shape
 
-        # Gather selected component parameters
-        B, K, D   = mu.shape
+        if use_mean:
+            idx = torch.argmax(log_pi, dim=-1)  # [B]
+        else:
+            pi  = torch.exp(log_pi / temperature)
+            pi /= pi.sum(dim=-1, keepdim=True)
+            idx = torch.multinomial(pi, 1).squeeze(-1)  # [B]
+
         idx_exp   = idx.view(B, 1, 1).expand(B, 1, D)
         mu_sel    = mu.gather(1, idx_exp).squeeze(1)     # [B, D]
         sigma_sel = sigma.gather(1, idx_exp).squeeze(1)  # [B, D]
 
-        # Sample from the selected Gaussian component.
-        # Temperature is applied only to the component selection above.
+        if use_mean:
+            return mu_sel
+
         noise = torch.randn_like(mu_sel)
         return mu_sel + sigma_sel * noise

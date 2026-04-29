@@ -1,4 +1,4 @@
-.PHONY: help install clean clean-checkpoint clean-data clean-log clean-research clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl quick-ctrl-real eval-dream eval-real watch-dream watch-real viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves research research-random research-bias
+.PHONY: help install clean clean-checkpoint clean-data clean-log clean-research clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl quick-ctrl-resume viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves research research-random research-bias
 
 PYTHON = .venv/bin/python
 VENV   = .venv
@@ -20,12 +20,12 @@ help:
 	@echo ""
 	@echo "  Quick runs"
 	@echo "    make quick            Collect + train VAE (200 biased rollouts × 1000 steps, 10 epochs), open viz"
-	@echo "    make full             Full pipeline (~3-6 hours on MacBook Pro M1), watch agent play"
+	@echo "    make full             Full pipeline (~6 hours on MacBook Pro M1), watch agent play"
 	@echo "    make quick-collect    Collect 200 biased rollouts × 1000 steps"
 	@echo "    make quick-vae        Train VAE for 10 epochs (batch 128)"
 	@echo "    make quick-rnn        Train MDN-RNN for 20 epochs (batch 64)"
-	@echo "    make quick-ctrl       Train controller: 50 gens x pop 16 x 4 eval (dream mode)"
-	@echo "    make quick-ctrl-real  Train controller: 50 gens x pop 16 x 4 eval (real env)"
+	@echo "    make quick-ctrl       Train controller: 50 gens x pop 16 x 4 eval (real env)"
+	@echo "    make quick-ctrl-resume Resume controller from last checkpoint"
 	@echo "    make debug            Verify gym works: fixed steer/gas/brake, ignores controller"
 	@echo ""
 	@echo "  Pipeline (step by step)"
@@ -126,8 +126,8 @@ quick-rnn:
 quick-ctrl:
 	$(PYTHON) main.py train-ctrl --generations 50 --pop-size 16 --n-eval-episodes 4
 
-quick-ctrl-real:
-	$(PYTHON) main.py train-ctrl --generations 50 --pop-size 16 --n-eval-episodes 4 --real-env
+quick-ctrl-resume:
+	$(PYTHON) main.py train-ctrl --generations 50 --pop-size 16 --n-eval-episodes 4 --resume
 
 train: train-vae train-rnn train-ctrl
 
@@ -163,25 +163,11 @@ research-bias:
 
 # ── Evaluate ──────────────────────────────────────────────────────────────────
 
-CONTROLLER ?=
-
 eval:
-	$(PYTHON) main.py eval --episodes 100 $(if $(CONTROLLER),--controller-mode $(CONTROLLER),)
-
-eval-dream:
-	$(PYTHON) main.py eval --episodes 100 --controller-mode dream
-
-eval-real:
-	$(PYTHON) main.py eval --episodes 100 --controller-mode real
+	$(PYTHON) main.py eval --episodes 100
 
 watch:
 	$(PYTHON) main.py eval --render --episodes 3
-
-watch-dream:
-	$(PYTHON) main.py eval --render --episodes 3 --controller-mode dream
-
-watch-real:
-	$(PYTHON) main.py eval --render --episodes 3 --controller-mode real
 
 # ── Visualize ─────────────────────────────────────────────────────────────────
 

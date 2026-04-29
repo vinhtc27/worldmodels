@@ -171,25 +171,14 @@ def run_episode(
 
 
 def evaluate(cfg, n_episodes: int = 10, render: bool = False, seed: Optional[int] = None,
-             debug_action: Optional[List] = None, controller_mode: Optional[str] = None):
+             debug_action: Optional[List] = None):
     """Load saved models and evaluate for n_episodes. Print summary table."""
     device = cfg.get_device()
 
     # If a debug action is supplied we don't require model checkpoints — the
     # fixed-action mode is intended to verify the environment and rendering.
     if debug_action is None:
-        # Allow explicit selection: controller_mode='dream' or 'real'. If not
-        # provided, fallback to existing auto-detect behavior (prefer dream).
-        if controller_mode == "dream":
-            ctrl_path = cfg.paths.controller_dream_checkpoint
-        elif controller_mode == "real":
-            ctrl_path = cfg.paths.controller_real_checkpoint
-        else:
-            ctrl_path = (
-                cfg.paths.controller_dream_checkpoint
-                if Path(cfg.paths.controller_dream_checkpoint).exists()
-                else cfg.paths.controller_real_checkpoint
-            )
+        ctrl_path = cfg.paths.controller_checkpoint
 
         for path, label in [
             (cfg.paths.vae_checkpoint, "VAE"),
@@ -208,7 +197,7 @@ def evaluate(cfg, n_episodes: int = 10, render: bool = False, seed: Optional[int
 
         ctrl = Controller(cfg.controller).to(device).eval()
         ctrl.load_state_dict(load_checkpoint(ctrl_path, device)["model"])
-        console.print(f"[green]All models loaded. Controller used: {ctrl_path} (mode={controller_mode or 'auto'})")
+        console.print(f"[green]All models loaded. Controller: {ctrl_path}")
     else:
         vae = rnn = ctrl = None
 

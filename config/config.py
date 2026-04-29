@@ -5,8 +5,6 @@ All components read from a single Config instance so values stay in sync.
 """
 import os
 from dataclasses import dataclass, field
-from typing import Optional
-
 
 # ─── Environment ────────────────────────────────────────────────────────────
 
@@ -36,7 +34,7 @@ class VAEConfig:
     # Encoder conv channels — each doubles filters, halves spatial dims
     enc_channels:  list  = field(default_factory=lambda: [32, 64, 128, 256])
     # Training
-    batch_size:    int   = 256  # float16 + 8GB VRAM → safe headroom; was 64
+    batch_size:    int   = 256  # float16 + 8GB VRAM → safe headroom
     lr:            float = 1e-4
     epochs:        int   = 10
     kl_weight:     float = 1.0   # β in β-VAE (β=1 → standard VAE)
@@ -56,13 +54,13 @@ class RNNConfig:
     latent_dim:    int   = 32    # must match VAEConfig.latent_dim
     action_dim:    int   = 3     # CarRacing: [steer, gas, brake]
     # Training
-    batch_size:    int   = 128  # float16 + 8GB VRAM; was 32
+    batch_size:    int   = 128   # float16 + 8GB VRAM
     seq_len:       int   = 32    # BPTT truncation length
     lr:            float = 1e-3
     epochs:        int   = 20
     grad_clip:     float = 1.0   # gradient clipping threshold for BPTT stability
-    temperature:   float = 1.15  # sampling temperature for dream/viz (>1 = more random)
-    save_interval: int   = 5
+    temperature:   float = 1.15  # sampling temperature for viz (>1 = more random)
+    save_interval: int   = 5     # save periodic checkpoint every N epochs
 
 
 # ─── Controller ──────────────────────────────────────────────────────────────
@@ -78,26 +76,19 @@ class ControllerConfig:
     sigma0:           float = 0.1   # initial search radius in parameter space
     n_eval_episodes:  int   = 4     # episodes per candidate (paper uses 16; 4 ok for quick runs)
     n_workers:        int   = field(default_factory=lambda: os.cpu_count() or 4)  # parallel worker processes (set 1 to disable)
-    # Dream mode — run controller entirely in latent space (no real env, ~50× faster)
-    dream_mode:        bool  = True   # default; pass --real-env to disable
-    dream_max_steps:   int   = 400    # steps per dream episode
-    dream_temperature: float = 1.15   # RNN sampling temperature (paper value)
-    # Reward model training (used when reward model checkpoint missing)
-    reward_model_epochs: int = 25
+    save_interval:    int   = 5     # save a periodic checkpoint every N generations (for resume)
 
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 
 @dataclass
 class PathConfig:
-    data_dir:               str = "data/rollouts"
-    checkpoint_dir:         str = "checkpoint"
-    log_dir:                str = "log"
-    vae_checkpoint:               str = "checkpoint/vae_best.pt"
-    rnn_checkpoint:               str = "checkpoint/rnn_best.pt"
-    controller_dream_checkpoint:  str = "checkpoint/controller_dream_best.pt"
-    controller_real_checkpoint:   str = "checkpoint/controller_real_best.pt"
-    reward_model_checkpoint:      str = "checkpoint/reward_model_best.pt"
+    data_dir:              str = "data/rollouts"
+    checkpoint_dir:        str = "checkpoint"
+    log_dir:               str = "log"
+    vae_checkpoint:        str = "checkpoint/vae_best.pt"
+    rnn_checkpoint:        str = "checkpoint/rnn_best.pt"
+    controller_checkpoint: str = "checkpoint/controller_best.pt"
 
 
 # ─── Master Config ────────────────────────────────────────────────────────────

@@ -15,16 +15,16 @@ Three independently trained components: VAE (vision) → MDN-RNN (memory) → Co
 
 ```text
 config/config.py      — all hyperparameters, edit here first before touching model code
-models/               — vae.py, mdn_rnn.py, controller.py, reward_model.py
+models/               — vae.py, mdn_rnn.py, controller.py
 data/                 — rollout_generator.py (collection), dataset.py (loaders)
-training/             — train_vae.py, train_rnn.py, train_controller.py, train_reward_model.py
+training/             — train_vae.py, train_rnn.py, train_controller.py
 evaluation/           — evaluate.py (run agent, custom pygame window)
 visualization/        — visualize.py (6 interactive matplotlib panels)
-utils/                — helpers.py (checkpoint load/save, shared utilities)
+utils/                — helpers.py (checkpoint load/save, MetricLogger)
 main.py               — single CLI entry point for everything
 Makefile              — run `make help` to see all commands
 checkpoint/           — saved model weights (.pt files)
-log/                  — training metric histories (JSON)
+log/                  — training metric histories (JSON, written after every epoch/gen)
 data/rollouts/        — collected rollout .npz files
 research/             — paper-scale run outputs (override with RESEARCH_DIR=path)
 ```
@@ -36,19 +36,18 @@ research/             — paper-scale run outputs (override with RESEARCH_DIR=pa
 | VAE | latent_dim=32, enc_channels=[32,64,128,256], img_size=64, batch_size=256, kl_weight=1.0, kl_tolerance=0.5 |
 | MDN-RNN | hidden_size=256, n_gaussians=5, num_layers=1, batch_size=128, grad_clip=1.0, temperature=1.15 |
 | Controller | input=latent_dim+hidden_size=288, output=3, n_params=867 |
-| CMA-ES | pop_size=16, n_generations=50, sigma0=0.1, n_eval_episodes=4, n_workers=cpu_count() |
+| CMA-ES | pop_size=16, n_generations=50, sigma0=0.1, n_eval_episodes=4, n_workers=cpu_count(), save_interval=5 |
 | Env | frame_skip=4, max_steps=1000, img_size=64, collection_mode="random", n_workers=cpu_count() |
 
 ## Training pipeline dependencies
 
 ```text
-collect  →  train-vae  →  (auto-encodes rollouts)  →  train-rnn  →  [reward model auto-trained]  →  train-ctrl
+collect  →  train-vae  →  (auto-encodes rollouts)  →  train-rnn  →  train-ctrl
 ```
 
 - train-vae automatically encodes all rollouts to z after finishing
 - train-rnn reads `*_encoded.npz` files, fails if VAE hasn't run yet
-- train-ctrl defaults to **dream mode**: trains reward model automatically on first run (reads encoded rollouts), then evaluates controller entirely in latent space — no real env needed, ~50× faster
-- train-ctrl with `--real-env`: original behaviour, evaluates in real CarRacing environment
+- train-ctrl evaluates each CMA-ES candidate in the real CarRacing environment (ground-truth rewards)
 
 ## Quick run params (all consistent)
 
@@ -60,7 +59,7 @@ collect  →  train-vae  →  (auto-encodes rollouts)  →  train-rnn  →  [rew
 | `make quick-vae` | — | 10 | — | — | — |
 | `make quick-rnn` | — | — | 20 | — | — |
 | `make quick-ctrl` | — | — | — | 50 | 16 |
-| `make quick-ctrl-real` | — | — | — | 50 | 16 |
+| `make quick-ctrl-resume` | — | — | — | 50 | 16 |
 
 - `make quick` and `make quick-collect` both use the default rollout length (`max_steps=1000`) with biased collection so the standalone commands match the stronger `quick --full` preset.
 
@@ -80,10 +79,18 @@ All research outputs (checkpoints, logs, viz PNGs/GIFs) land under `research/` b
 - `--base-dir DIR`: global flag on `main.py` redirecting ALL outputs (data, checkpoint, log) under `DIR`. Created automatically. Used by `make research`.
 - `--collection-mode random|biased`: override per-run on `collect`. "random" = pure iid (paper default); "biased" = hold 8 steps, high gas.
 - `--skip-collect/--skip-vae/--skip-rnn/--skip-ctrl`: skip steps on `all` and `quick --full` commands to reuse existing checkpoints/data.
-- `quick --full` now uses biased collection by default and a larger budget (200 rollouts, VAE 10 epochs, RNN 20 epochs, CMA-ES 50 gens × pop 16 × 4 eval) to improve the chance of a non-circular policy.
-- `--real-env` on `train-ctrl`: disable dream mode, evaluate controller in the real CarRacing environment (slow but ground-truth reward).
+- `quick --full` uses biased collection by default and a larger budget (200 rollouts, VAE 10 epochs, RNN 20 epochs, CMA-ES 50 gens × pop 16 × 4 eval).
+- `--resume` on `train-ctrl`: resumes from most recent periodic gen checkpoint (`controller_gen_NNN.pt`), falls back to `controller_best.pt`. CMA-ES restarts with best params as x0 — not true resume of covariance state.
 - Rollout collection is **incremental**: existing `rollout_NNNNN.npz` files are detected and skipped; only missing indices are collected.
-- Controller checkpoints are mode-specific: `checkpoint/controller_dream_best.pt` and `checkpoint/controller_real_best.pt`. `eval` and `viz` prefer dream if it exists.
+
+## Controller checkpoints
+
+Two checkpoint types saved during training:
+
+- `checkpoint/controller_best.pt` — saved whenever a new best reward is found
+- `checkpoint/controller_gen_NNN.pt` — saved every `save_interval=5` generations, always holds the global best params at that point
+
+Resume prefers the highest-numbered `controller_gen_*.pt` (most recent gen) over `controller_best.pt`.
 
 ## Frame normalization
 
@@ -108,3 +115,8 @@ This applies in `evaluate.py`, `train_controller.py`, and anywhere `preprocess_f
    Fix: use tanh for all 3 outputs (as in the paper). tanh(0)=0 so init is gas=0, brake=0 — neutral
    start. Negative tanh outputs are clipped to 0 by the env. CMA-ES only needs to learn to push gas
    positive, which it finds quickly. Changing this activation requires retraining from scratch.
+
+2. **MPS (Apple Silicon) workers run on CPU.**
+   CMA-ES uses `ProcessPoolExecutor` — spawned worker processes cannot inherit the Metal GPU context
+   from the parent. Workers silently fall back to CPU. This is a macOS/Metal limitation, not a bug.
+   The main process uses MPS for VAE/RNN loading; evaluation workers use CPU. Expected behaviour.

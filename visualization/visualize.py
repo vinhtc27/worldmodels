@@ -5,7 +5,7 @@ Panels available:
   1. vae_reconstruction  — compare real vs reconstructed frames
   2. latent_space        — 2-D PCA/UMAP of z across rollout
   3. rnn_dream           — hallucinate frames inside the world model (no real env)
-  4. training_curves     — plot VAE + RNN loss histories
+  4. training_curves     — plot VAE + RNN loss histories + CMA-ES reward per generation
   5. rollout_replay      — step through a recorded rollout with z/h overlay
   6. latent_walk         — interpolate between two random latent vectors
 """
@@ -42,11 +42,7 @@ def _load_all(cfg, device):
     rnn  = MDNRNN(cfg.rnn).to(device).eval()
     ctrl = Controller(cfg.controller).to(device).eval()
 
-    ctrl_path = (
-        cfg.paths.controller_dream_checkpoint
-        if Path(cfg.paths.controller_dream_checkpoint).exists()
-        else cfg.paths.controller_real_checkpoint
-    )
+    ctrl_path = cfg.paths.controller_checkpoint
     for path, model, label in [
         (cfg.paths.vae_checkpoint, vae,  "VAE"),
         (cfg.paths.rnn_checkpoint, rnn,  "MDN-RNN"),
@@ -268,20 +264,20 @@ def rnn_dream(cfg, n_steps: int = 200, temperature: float = 1.0,
 # ── 4. Training Curves ────────────────────────────────────────────────────────
 
 def training_curves(cfg, save_path: Optional[str] = None):
-    """Plot VAE + RNN training loss histories from saved JSON log."""
+    """Plot VAE + RNN loss histories and CMA-ES controller reward from saved JSON logs."""
     import json
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 4))
     fig.suptitle("Training Curves", fontsize=12)
 
-    # Log filenames match MetricLogger("vae"/"rnn", ...) → vae_history.json / rnn_history.json
-    for ax, name, log_name, metrics in [
-        (axes[0], "VAE",     "vae", ["loss", "recon", "kl", "val_loss"]),
-        (axes[1], "MDN-RNN", "rnn", ["loss", "val_loss"]),
+    for ax, name, log_name, metrics, ylabel, xlabel in [
+        (axes[0], "VAE",        "vae",        ["loss", "recon", "kl", "val_loss"], "Loss",   "Epoch"),
+        (axes[1], "MDN-RNN",    "rnn",        ["loss", "val_loss"],                "Loss",   "Epoch"),
+        (axes[2], "Controller", "controller", ["mean_reward", "max_reward"],       "Reward", "Generation"),
     ]:
         path = Path(cfg.paths.log_dir) / f"{log_name}_history.json"
         if not path.exists():
-            ax.text(0.5, 0.5, "No log found", ha="center", va="center")
+            ax.text(0.5, 0.5, "No log found", ha="center", va="center", transform=ax.transAxes)
             ax.set_title(name)
             continue
         with open(path) as f:
@@ -290,8 +286,8 @@ def training_curves(cfg, save_path: Optional[str] = None):
             if m in history:
                 ax.plot(history[m], label=m)
         ax.set_title(name)
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Loss")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
         ax.legend()
         ax.grid(alpha=0.3)
 

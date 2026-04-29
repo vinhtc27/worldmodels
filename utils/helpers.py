@@ -93,6 +93,7 @@ class MetricLogger:
             if k != "epoch":
                 table.add_row(k, f"{v:.4f}")
         console.print(table)
+        self.save()
         return row
 
     def save(self):
