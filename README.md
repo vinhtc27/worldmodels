@@ -92,8 +92,10 @@ world/
 ├── training/               # Training loops for V, M, C
 ├── evaluation/             # Run the agent in the real environment
 ├── visualization/          # 6 interactive visualization panels
+├── utils/                  # Shared helpers (checkpoint load/save)
 ├── checkpoint/             # Saved model weights
 ├── log/                    # Training histories
+├── research/               # Paper-scale run outputs (auto-created)
 └── main.py                 # CLI entry point
 ```
 
@@ -150,6 +152,21 @@ python main.py eval --render --episodes 3 --window-size 600 600
 python main.py eval --episodes 100
 ```
 
+### Paper-scale reproduction
+
+```bash
+# Pure random policy — matches the paper's collection method
+make research-random
+
+# Biased policy — our variant (high-gas collection for denser coverage)
+make research-bias
+
+# Custom output directory
+RESEARCH_DIR=my_run make research-random
+```
+
+Runs: 10k rollouts → VAE 1 epoch → RNN 20 epochs → CMA-ES 1800 gens × pop 64 × 16 eval → benchmark 100 episodes + save all visualizations. Outputs land in `research/` by default.
+
 ### Visualize
 
 ```bash
@@ -188,7 +205,7 @@ Realistic expectations for this implementation:
 | Quick (5 gens, 15 rollouts) | −50 to 200 |
 | Default (50 gens, 200 rollouts) | 300 – 600 |
 | Extended (100+ gens, 500+ rollouts) | 700 – 850 |
-| Paper (200 gens, 10k rollouts, 64 workers) | **906 ± 21** |
+| Paper (1800 gens, 10k rollouts, pop 64 × 16 eval) | **906 ± 21** |
 
 The controller is the main bottleneck — more CMA-ES generations with a larger population raises the score most. More rollouts improve the quality of V and M, giving the controller a better representation to work with.
 
