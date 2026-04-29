@@ -331,7 +331,7 @@ def cmd_quick(args, cfg):
             "[bold green]Quick FULL pipeline[/]\n"
             "200 rollouts  |  biased collection  |  VAE 10 epochs  |  RNN 20 epochs  |  CMA-ES 50 gens × pop 16 × 4 eval\n"
             "[dim]Full quick run — better chance of reaching a meaningful policy[/]",
-            title="~30-60 min end-to-end",
+            title="~3-6 hours on MacBook Pro M1 with end-to-end training",
         ))
 
         console.rule("[bold cyan]1/5  Collect")

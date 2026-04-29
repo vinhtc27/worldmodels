@@ -20,7 +20,7 @@ help:
 	@echo ""
 	@echo "  Quick runs"
 	@echo "    make quick            Collect + train VAE (200 biased rollouts × 1000 steps, 10 epochs), open viz"
-	@echo "    make full             Full pipeline (~30-60 min), watch agent play"
+	@echo "    make full             Full pipeline (~3-6 hours on MacBook Pro M1), watch agent play"
 	@echo "    make quick-collect    Collect 200 biased rollouts × 1000 steps"
 	@echo "    make quick-vae        Train VAE for 10 epochs (batch 128)"
 	@echo "    make quick-rnn        Train MDN-RNN for 20 epochs (batch 64)"
