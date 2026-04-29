@@ -56,12 +56,15 @@ def train_rnn(cfg, resume: bool = False):
         generator=torch.Generator().manual_seed(cfg.seed),
     )
     num_workers = min(os.cpu_count() or 4, 8)
+    # Only pin memory when using CUDA; MPS doesn't support pinned memory and CPU
+    # workers can be heavier on some macOS setups. Keep behavior consistent with train_vae.
+    pin_memory = True if device == "cuda" else False
     train_loader = DataLoader(train_ds, batch_size=cfg.rnn.batch_size, shuffle=True,
-                              num_workers=num_workers, pin_memory=True,
-                              persistent_workers=num_workers > 0)
+                              num_workers=num_workers, pin_memory=pin_memory,
+                              persistent_workers=(num_workers > 0) if pin_memory else False)
     val_loader   = DataLoader(val_ds,   batch_size=cfg.rnn.batch_size, shuffle=False,
-                              num_workers=num_workers, pin_memory=True,
-                              persistent_workers=num_workers > 0)
+                              num_workers=num_workers, pin_memory=pin_memory,
+                              persistent_workers=(num_workers > 0) if pin_memory else False)
 
     console.print(f"  Train windows: {len(train_ds)}  |  Val windows: {len(val_ds)}")
 

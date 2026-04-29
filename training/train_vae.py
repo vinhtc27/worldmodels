@@ -75,13 +75,22 @@ def train_vae(cfg, resume: bool = False):
         dataset, [len(dataset) - val_size, val_size],
         generator=torch.Generator().manual_seed(cfg.seed),
     )
-    num_workers = min(os.cpu_count() or 4, 8)
+    if device == "cuda":
+        # Standard fast path: overlap host-side loading with GPU work.
+        num_workers = min(os.cpu_count() or 4, 8)
+        pin_memory = True
+        persistent_workers = num_workers > 0
+    else:
+        # Keep the fallback lean on CPU/MPS to avoid extra process and memory overhead.
+        num_workers = 0
+        pin_memory = False
+        persistent_workers = False
     train_loader = DataLoader(train_ds, batch_size=cfg.vae.batch_size, shuffle=True,
-                              num_workers=num_workers, pin_memory=True,
-                              persistent_workers=num_workers > 0)
+                              num_workers=num_workers, pin_memory=pin_memory,
+                              persistent_workers=persistent_workers)
     val_loader   = DataLoader(val_ds,   batch_size=cfg.vae.batch_size, shuffle=False,
-                              num_workers=num_workers, pin_memory=True,
-                              persistent_workers=num_workers > 0)
+                              num_workers=num_workers, pin_memory=pin_memory,
+                              persistent_workers=persistent_workers)
 
     # ── Model ─────────────────────────────────────────────────────────────────
     vae = VAE(cfg.vae).to(device)

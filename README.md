@@ -42,14 +42,105 @@ Training happens in three sequential stages:
 1. Collect  →  random rollouts from the environment (frames + actions)
 2. Train V  →  VAE learns to encode/decode frames into latent z
 3. Train M  →  MDN-RNN learns environment dynamics from encoded sequences
-4. Train C  →  CMA-ES evolves the controller in the real environment
+4. Train C  →  CMA-ES evolves the controller (dream mode by default)
 ```
 
-The controller never sees rollout data directly. It is evaluated by running in the real game, with V and M providing the compressed representation.
+**Dream mode (default):** The controller is evaluated entirely inside the learned world model — no real environment needed. A small reward model `R(z, h, a) → r` is trained automatically on the encoded rollouts, then CMA-ES evolves the controller by rolling out V+M+R in latent space. This is ~50× faster than real-env evaluation.
+
+**Real-env mode (`--real-env`):** The original approach — run full CarRacing episodes, encode each frame via V, maintain hidden state via M, and use ground-truth rewards. Slower but uses no learned reward approximation.
 
 ### Dreaming
 
 Once V and M are trained, the agent can "dream" — hallucinating future frames by rolling out the MDN-RNN in latent space, bypassing the real environment entirely. In extended experiments, the paper trains the controller *inside the dream* and transfers the resulting policy to the real environment.
+
+---
+
+## Controller Training Modes
+
+The controller can be trained in two fundamentally different ways. The choice affects what components are active during CMA-ES evaluation and where the reward signal comes from.
+
+### Real-env mode (`--real-env`)
+
+```text
+  ┌─────────────────── one step ────────────────────────────┐
+  │                                                         │
+  │  ┌──────────────┐  frame   ┌───────┐   z (32d)          │
+  │  │  Real Env    │─────────▶│  VAE  │──────────┐         │
+  │  │  (Box2D)     │          └───────┘           ▼        │
+  │  │              │                    ┌─────────────────┐│
+  │  │  env.step(a) │◀──── action ───────│   Controller    ││
+  │  │              │                    │    z ⊕ h → a    ││
+  │  └──────┬───────┘                    └────────▲────────┘│
+  │         │                                     │         │
+  │         │ reward ✓             ┌───────┐   h  │         │
+  │         │ (ground truth)       │  RNN  │──────┘         │
+  │         │                      └───────┘                │
+  └─────────┴───────────────────────────────────────────────┘
+```
+
+At every step the real Box2D simulator produces a pixel frame. The VAE encodes it to `z`, the RNN maintains hidden state `h` across steps, the controller maps `(z, h) → action`, and the environment returns a ground-truth reward. The bottleneck is the physics simulator — each episode is seconds of wall time.
+
+**Pros:** Ground-truth reward; controller cannot exploit model inaccuracies.
+**Cons:** 1000 steps × frame_skip=4 × n_episodes × pop_size evaluations per generation — very slow.
+
+### Dream mode (default)
+
+```text
+  ┌─────────────────── one step ────────────────────────────┐
+  │                                                         │
+  │   z_t ──▶ ┌─────────────────┐                           │
+  │           │   Controller    │─── action ───┐            │
+  │   h_t ──▶ │    z ⊕ h → a    │              │            │
+  │           └─────────────────┘              │            │
+  │                                            ▼            │
+  │                                    ┌─────────────────┐  │
+  │                                    │  Reward Model   │  │
+  │                                    │  (z, h, a) → r̂  │  │
+  │                                    └─────────────────┘  │
+  │                                            │            │
+  │                               ┌──────────────────────┐  │
+  │                               │    RNN  .sample()    │  │
+  │                               │ (z, a, h) → z', h'   │  │
+  │                               └────────────┬─────────┘  │
+  │                                            │            │
+  │               z_{t+1}, h_{t+1} ◀───────────┘(next step) │
+  └─────────────────────────────────────────────────────────┘
+```
+
+No real environment. No VAE. The RNN replaces the physics engine — given `(z_t, a_t, h_t)` it samples the next latent `z_{t+1}` from its learned MDN mixture. The reward model predicts `r̂` from the agent's internal state. Everything is pure tensor ops on CPU.
+
+**Pros:** ~50× faster — no physics, no rendering, no VAE inference per step.
+**Cons:** Reward is approximate; controller can exploit model imperfections. RNN temperature τ=1.15 adds stochasticity to the dream, making exploitation harder.
+
+### Architectural summary
+
+| | Real-env | Dream |
+| --- | --- | --- |
+| Real environment | ✓ (Box2D physics) | ✗ |
+| VAE (frame → z) | ✓ per step | ✗ (z from RNN) |
+| RNN (hidden state h) | ✓ memory only | ✓ dynamics + memory |
+| Reward model | ✗ | ✓ R(z,h,a)→r̂ |
+| Reward source | ground truth | learned approximation |
+| Speed per generation | slow (real episodes) | fast (tensor rollouts) |
+| Risk | none | model exploitation |
+
+### Why the paper's dream mode doesn't directly apply to CarRacing
+
+The original paper implements dream training only for VizDoom (DoomTakeCover), not CarRacing. The reason is subtle: **the dream world needs a reward signal**, and the two tasks provide it very differently.
+
+In VizDoom the reward is simply survival time — the agent gets +1 for every frame it stays alive. The paper modifies the MDN-RNN to also predict a binary `done` signal (did the agent die this frame?). With that, the dream world has everything it needs:
+
+> *"M model here will also predict whether the agent dies in the next frame (as a binary event done_t), in addition to the next frame z_t."*
+
+So the full VizDoom dream loop is: `RNN predicts (z_next, done)` — no reward model needed, just count steps until `done = True`.
+
+**CarRacing is harder.** The reward is continuous (`+1000/N` per new tile crossed, `−0.1` per frame), depends on track position, and has no clean binary signal the RNN can easily predict. The paper sidesteps this entirely by keeping CarRacing in the real environment.
+
+**Our solution — a learned reward model `R(z, h, a) → r̂`:** We train a small MLP on the encoded rollouts to approximate the per-step reward from the agent's internal state. This lets us bring dream training to CarRacing at the cost of reward approximation error. The same temperature regularisation the paper uses for VizDoom applies here too:
+
+> *"agents that perform well in higher temperature settings generally perform better in the normal setting. In fact, increasing τ helps prevent our controller from taking advantage of the imperfections of our world model."*
+
+The reward model is an extension beyond the paper. Use `--real-env` if you want to match the paper's exact CarRacing setup.
 
 ---
 
@@ -87,9 +178,10 @@ world/
 ├── models/
 │   ├── vae.py              # V model
 │   ├── mdn_rnn.py          # M model
-│   └── controller.py       # C model
+│   ├── controller.py       # C model
+│   └── reward_model.py     # R model — (z, h, a) → r, used in dream mode
 ├── data/                   # Rollout collection and datasets
-├── training/               # Training loops for V, M, C
+├── training/               # Training loops for V, M, C, R
 ├── evaluation/             # Run the agent in the real environment
 ├── visualization/          # 6 interactive visualization panels
 ├── utils/                  # Shared helpers (checkpoint load/save)
@@ -105,7 +197,7 @@ All hyperparameters (architecture, training, CMA-ES) are in `config/config.py`. 
 
 ## Usage
 
-### Quick start (~2 min, VAE only)
+### Quick start (~10–20 min, collect + train VAE)
 
 ```bash
 python main.py quick
@@ -113,13 +205,15 @@ python main.py quick --panel rollout_replay
 python main.py quick --panel vae_reconstruction
 ```
 
-### Full end-to-end, watch agent play live (~5–10 min)
+`quick` also uses the biased collection preset by default (200 rollouts × 1000 steps), so it matches the stronger quick-run data collection behavior.
+
+### Full end-to-end, watch agent play live (~30–60 min)
 
 ```bash
 python main.py quick --full
 ```
 
-Runs all steps with minimal settings and opens a live game window at the end. The agent won't drive well at this scale, but the full pipeline is exercised.
+Runs the stronger preset (200 biased rollouts × 1000 steps → VAE 10 epochs → then the remaining steps in `quick --full`) and opens a live game window at the end. Controller trains in dream mode by default — no real env needed for CMA-ES.
 
 ### Skip steps already completed
 
@@ -139,7 +233,8 @@ python main.py all
 python main.py collect --n-rollouts 500
 python main.py train-vae --epochs 20
 python main.py train-rnn --epochs 30
-python main.py train-ctrl --generations 100 --pop-size 16 --n-workers 4
+python main.py train-ctrl --generations 100 --pop-size 16 --n-workers 4   # dream mode (default)
+python main.py train-ctrl --generations 100 --pop-size 16 --real-env      # real environment
 ```
 
 ### Evaluate
@@ -158,12 +253,14 @@ python main.py eval --episodes 100
 # Pure random policy — matches the paper's collection method
 make research-random
 
-# Biased policy — our variant (high-gas collection for denser coverage)
+# Biased policy — our variant
 make research-bias
 
 # Custom output directory
 RESEARCH_DIR=my_run make research-random
 ```
+
+`biased` collection means the rollout policy samples **higher gas, lower brake, and holds the same action for 8 control steps** before resampling. In practice this helps the car keep moving and cover more of the track, so the dataset has fewer idle / spinning / stuck trajectories than pure random collection.
 
 Runs: 10k rollouts → VAE 1 epoch → RNN 20 epochs → CMA-ES 1800 gens × pop 64 × 16 eval → benchmark 100 episodes + save all visualizations. Outputs land in `research/` by default.
 
@@ -202,9 +299,9 @@ Realistic expectations for this implementation:
 
 | Training scale | Approximate score |
 | --- | --- |
-| Quick (5 gens, 15 rollouts) | −50 to 200 |
-| Default (50 gens, 200 rollouts) | 300 – 600 |
-| Extended (100+ gens, 500+ rollouts) | 700 – 850 |
+| Quick (`quick --full`, biased, 200 rollouts, 50 gens × pop16 × 4 eval) | 100 – 500 |
+| Default (config defaults, random collection, dream) | 400 – 650 |
+| Extended (100+ gens, 500+ rollouts, dream) | 650 – 850 |
 | Paper (1800 gens, 10k rollouts, pop 64 × 16 eval) | **906 ± 21** |
 
 The controller is the main bottleneck — more CMA-ES generations with a larger population raises the score most. More rollouts improve the quality of V and M, giving the controller a better representation to work with.

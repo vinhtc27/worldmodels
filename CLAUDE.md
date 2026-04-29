@@ -15,9 +15,9 @@ Three independently trained components: VAE (vision) → MDN-RNN (memory) → Co
 
 ```text
 config/config.py      — all hyperparameters, edit here first before touching model code
-models/               — vae.py, mdn_rnn.py, controller.py
+models/               — vae.py, mdn_rnn.py, controller.py, reward_model.py
 data/                 — rollout_generator.py (collection), dataset.py (loaders)
-training/             — train_vae.py, train_rnn.py, train_controller.py
+training/             — train_vae.py, train_rnn.py, train_controller.py, train_reward_model.py
 evaluation/           — evaluate.py (run agent, custom pygame window)
 visualization/        — visualize.py (6 interactive matplotlib panels)
 utils/                — helpers.py (checkpoint load/save, shared utilities)
@@ -42,23 +42,27 @@ research/             — paper-scale run outputs (override with RESEARCH_DIR=pa
 ## Training pipeline dependencies
 
 ```text
-collect  →  train-vae  →  (auto-encodes rollouts)  →  train-rnn  →  train-ctrl
+collect  →  train-vae  →  (auto-encodes rollouts)  →  train-rnn  →  [reward model auto-trained]  →  train-ctrl
 ```
 
 - train-vae automatically encodes all rollouts to z after finishing
 - train-rnn reads `*_encoded.npz` files, fails if VAE hasn't run yet
-- train-ctrl evaluates in real env, does NOT use rollout data
+- train-ctrl defaults to **dream mode**: trains reward model automatically on first run (reads encoded rollouts), then evaluates controller entirely in latent space — no real env needed, ~50× faster
+- train-ctrl with `--real-env`: original behaviour, evaluates in real CarRacing environment
 
 ## Quick run params (all consistent)
 
 | Command | Rollouts | VAE epochs | RNN epochs | Ctrl gens | Pop size |
 | --- | --- | --- | --- | --- | --- |
-| `make quick` | 15 | 2 | — | — | — |
-| `make full` (`quick --full`) | 15 | 2 | 3 | 5 | 4 |
-| `make quick-collect` | 15 | — | — | — | — |
-| `make quick-vae` | — | 2 | — | — | — |
-| `make quick-rnn` | — | — | 3 | — | — |
-| `make quick-ctrl` | — | — | — | 5 | 4 |
+| `make quick` | 200 | 10 | — | — | — |
+| `make full` (`quick --full`) | 200 | 10 | 20 | 50 | 16 |
+| `make quick-collect` | 200 | — | — | — | — |
+| `make quick-vae` | — | 10 | — | — | — |
+| `make quick-rnn` | — | — | 20 | — | — |
+| `make quick-ctrl` | — | — | — | 50 | 16 |
+| `make quick-ctrl-real` | — | — | — | 50 | 16 |
+
+- `make quick` and `make quick-collect` both use the default rollout length (`max_steps=1000`) with biased collection so the standalone commands match the stronger `quick --full` preset.
 
 ## Research (paper-scale) pipeline
 
@@ -76,7 +80,10 @@ All research outputs (checkpoints, logs, viz PNGs/GIFs) land under `research/` b
 - `--base-dir DIR`: global flag on `main.py` redirecting ALL outputs (data, checkpoint, log) under `DIR`. Created automatically. Used by `make research`.
 - `--collection-mode random|biased`: override per-run on `collect`. "random" = pure iid (paper default); "biased" = hold 8 steps, high gas.
 - `--skip-collect/--skip-vae/--skip-rnn/--skip-ctrl`: skip steps on `all` and `quick --full` commands to reuse existing checkpoints/data.
+- `quick --full` now uses biased collection by default and a larger budget (200 rollouts, VAE 10 epochs, RNN 20 epochs, CMA-ES 50 gens × pop 16 × 4 eval) to improve the chance of a non-circular policy.
+- `--real-env` on `train-ctrl`: disable dream mode, evaluate controller in the real CarRacing environment (slow but ground-truth reward).
 - Rollout collection is **incremental**: existing `rollout_NNNNN.npz` files are detected and skipped; only missing indices are collected.
+- Controller checkpoints are mode-specific: `checkpoint/controller_dream_best.pt` and `checkpoint/controller_real_best.pt`. `eval` and `viz` prefer dream if it exists.
 
 ## Frame normalization
 

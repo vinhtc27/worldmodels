@@ -74,6 +74,8 @@ def build_parser():
                            help="Override cfg.env.n_rollouts")
     p_collect.add_argument("--n-workers",  type=int, default=None,
                            help="Parallel workers (1=sequential, >1 multiprocessing)")
+    p_collect.add_argument("--max-steps",  type=int, default=None,
+                           help="Override cfg.env.max_steps for rollout length")
     p_collect.add_argument("--tag", default="train", help="Dataset split tag")
     p_collect.add_argument("--collection-mode", choices=["random", "biased"], default=None,
                            help="random: pure iid (paper); biased: hold actions 8 steps, high gas (default: cfg value)")
@@ -82,6 +84,7 @@ def build_parser():
     p_vae = sub.add_parser("train-vae", help="Train the VAE (Vision Model)")
     p_vae.add_argument("--epochs",    type=int,   default=None)
     p_vae.add_argument("--lr",        type=float, default=None)
+    p_vae.add_argument("--batch-size", type=int,   default=None)
     p_vae.add_argument("--latent-dim",type=int,   default=None)
     p_vae.add_argument("--kl-weight", type=float, default=None)
     p_vae.add_argument("--resume",    action="store_true")
@@ -90,6 +93,7 @@ def build_parser():
     p_rnn = sub.add_parser("train-rnn", help="Train the MDN-RNN (Memory Model)")
     p_rnn.add_argument("--epochs",      type=int,   default=None)
     p_rnn.add_argument("--lr",          type=float, default=None)
+    p_rnn.add_argument("--batch-size",  type=int,   default=None)
     p_rnn.add_argument("--hidden-size", type=int,   default=None)
     p_rnn.add_argument("--n-gaussians", type=int,   default=None)
     p_rnn.add_argument("--resume",      action="store_true")
@@ -101,6 +105,10 @@ def build_parser():
     p_ctrl.add_argument("--n-workers",      type=int,   default=None)
     p_ctrl.add_argument("--n-eval-episodes",type=int,   default=None)
     p_ctrl.add_argument("--resume",         action="store_true")
+    p_ctrl.add_argument(
+        "--real-env", action="store_true",
+        help="Evaluate in the real environment instead of the dream world (slower, no reward model needed)",
+    )
 
     # ── eval ──────────────────────────────────────────────────────────────────
     p_eval = sub.add_parser("eval", help="Evaluate the full pipeline")
@@ -111,6 +119,8 @@ def build_parser():
                         default=None, help="Render window size e.g. --window-size 600 600")
     p_eval.add_argument("--debug-action", type=float, nargs=3, metavar=("STEER", "GAS", "BRAKE"),
                         default=None, help="Override controller with a fixed action e.g. --debug-action 1.0 0.8 0.0")
+    p_eval.add_argument("--controller-mode", choices=["dream", "real"], default=None,
+                        help="Which controller checkpoint to use: 'dream' or 'real' (default: auto-detect)")
 
     # ── viz ───────────────────────────────────────────────────────────────────
     p_viz = sub.add_parser("viz", help="Interactive visualizations")
@@ -157,7 +167,7 @@ def build_parser():
     p_quick.add_argument("--skip-vae",     action="store_true", help="Skip VAE training (load checkpoint)")
     p_quick.add_argument("--skip-rnn",     action="store_true", help="Skip RNN training (load checkpoint)")
     p_quick.add_argument("--skip-ctrl",    action="store_true", help="Skip controller training (load checkpoint)")
-    p_quick.add_argument("--max-steps",    type=int, default=10000, help="Steps per rollout (default 10000)")
+    p_quick.add_argument("--max-steps",    type=int, default=1000, help="Steps per rollout (default 1000)")
     p_quick.add_argument("--full",         action="store_true",
                          help="Run ALL steps (collect→VAE→RNN→Controller) then watch the agent play live (~5-10 min)")
 
@@ -174,9 +184,11 @@ def apply_base_dir(cfg, base_dir: str):
     cfg.paths.data_dir              = str(base / "data" / "rollouts")
     cfg.paths.checkpoint_dir        = str(base / "checkpoint")
     cfg.paths.log_dir               = str(base / "log")
-    cfg.paths.vae_checkpoint        = str(base / "checkpoint" / "vae_best.pt")
-    cfg.paths.rnn_checkpoint        = str(base / "checkpoint" / "rnn_best.pt")
-    cfg.paths.controller_checkpoint = str(base / "checkpoint" / "controller_best.pt")
+    cfg.paths.vae_checkpoint                = str(base / "checkpoint" / "vae_best.pt")
+    cfg.paths.rnn_checkpoint                = str(base / "checkpoint" / "rnn_best.pt")
+    cfg.paths.controller_dream_checkpoint   = str(base / "checkpoint" / "controller_dream_best.pt")
+    cfg.paths.controller_real_checkpoint    = str(base / "checkpoint" / "controller_real_best.pt")
+    cfg.paths.reward_model_checkpoint       = str(base / "checkpoint" / "reward_model_best.pt")
     for d in (cfg.paths.data_dir, cfg.paths.checkpoint_dir, cfg.paths.log_dir):
         os.makedirs(d, exist_ok=True)
 
@@ -188,11 +200,13 @@ def apply_overrides(cfg, args):
     if cmd == "train-vae":
         if args.epochs:      cfg.vae.epochs    = args.epochs
         if args.lr:          cfg.vae.lr        = args.lr
+        if args.batch_size:  cfg.vae.batch_size = args.batch_size
         if args.latent_dim:  cfg.vae.latent_dim = args.latent_dim
         if args.kl_weight:   cfg.vae.kl_weight = args.kl_weight
     elif cmd == "train-rnn":
         if args.epochs:       cfg.rnn.epochs      = args.epochs
         if args.lr:           cfg.rnn.lr          = args.lr
+        if args.batch_size:   cfg.rnn.batch_size   = args.batch_size
         if args.hidden_size:  cfg.rnn.hidden_size = args.hidden_size
         if args.n_gaussians:  cfg.rnn.n_gaussians = args.n_gaussians
     elif cmd == "train-ctrl":
@@ -200,6 +214,8 @@ def apply_overrides(cfg, args):
         if args.pop_size:        cfg.controller.pop_size        = args.pop_size
         if args.n_workers:       cfg.controller.n_workers       = args.n_workers
         if args.n_eval_episodes: cfg.controller.n_eval_episodes = args.n_eval_episodes
+        if getattr(args, "real_env", False):
+            cfg.controller.dream_mode = False
     elif cmd == "all":
         if args.n_rollouts:  cfg.env.n_rollouts            = args.n_rollouts
         if args.vae_epochs:  cfg.vae.epochs                = args.vae_epochs
@@ -214,9 +230,13 @@ def cmd_collect(args, cfg):
     n = args.n_rollouts or cfg.env.n_rollouts
     if args.n_workers is not None:
         cfg.env.n_workers = args.n_workers
+    if args.max_steps is not None:
+        cfg.env.max_steps = args.max_steps
     if args.collection_mode is not None:
         cfg.env.collection_mode = args.collection_mode
-    console.print(Panel(f"Collecting [cyan]{n}[/] rollouts  (env: [bold]{cfg.env.name}[/], workers=[cyan]{cfg.env.n_workers}[/])"))
+    console.print(Panel(
+        f"Collecting [cyan]{n}[/] rollouts  (env: [bold]{cfg.env.name}[/], steps=[cyan]{cfg.env.max_steps}[/], workers=[cyan]{cfg.env.n_workers}[/])"
+    ))
     collect_rollouts(cfg, n_rollouts=n, tag=args.tag)
 
 
@@ -255,7 +275,7 @@ def cmd_eval(args, cfg):
         cfg.env.window_width, cfg.env.window_height = args.window_size
     console.print(Panel(f"Evaluating — [cyan]{args.episodes}[/] episodes"))
     evaluate(cfg, n_episodes=args.episodes, render=args.render, seed=args.seed,
-             debug_action=args.debug_action)
+             debug_action=args.debug_action, controller_mode=args.controller_mode)
 
 
 def cmd_viz(args, cfg):
@@ -294,23 +314,24 @@ def cmd_quick(args, cfg):
     )
 
     if args.full:
-        # ── Full quick pipeline: all steps with tiny settings, ends with live play ──
-        cfg.env.n_rollouts          = 15
-        cfg.env.max_steps           = args.max_steps
-        cfg.vae.epochs              = 2
-        cfg.vae.batch_size          = 32
-        cfg.rnn.epochs              = 3
-        cfg.rnn.batch_size          = 16
-        cfg.controller.pop_size     = 4
-        cfg.controller.n_generations = 5
-        cfg.controller.n_eval_episodes = 1
-        cfg.controller.n_workers    = 1   # avoid multiprocessing overhead for tiny pop
+        # ── Full quick pipeline: collect → VAE → RNN → Controller → Eval ──
+        cfg.env.n_rollouts             = 200
+        cfg.env.max_steps              = args.max_steps
+        cfg.env.collection_mode        = "biased"
+        cfg.vae.epochs                 = 10
+        cfg.vae.batch_size             = 128
+        cfg.rnn.epochs                 = 20
+        cfg.rnn.batch_size             = 64
+        cfg.controller.pop_size        = 16
+        cfg.controller.n_generations   = 50
+        cfg.controller.n_eval_episodes = 4
+        cfg.controller.n_workers       = min(8, cfg.controller.n_workers)
 
         console.print(Panel(
             "[bold green]Quick FULL pipeline[/]\n"
-            "15 rollouts  |  VAE 2 epochs  |  RNN 3 epochs  |  CMA-ES 5 gens × pop 4\n"
-            "[dim]The agent won't drive well — but you'll see it play live at the end[/]",
-            title="~5-10 min end-to-end",
+            "200 rollouts  |  biased collection  |  VAE 10 epochs  |  RNN 20 epochs  |  CMA-ES 50 gens × pop 16 × 4 eval\n"
+            "[dim]Full quick run — better chance of reaching a meaningful policy[/]",
+            title="~30-60 min end-to-end",
         ))
 
         console.rule("[bold cyan]1/5  Collect")
@@ -350,16 +371,17 @@ def cmd_quick(args, cfg):
 
     else:
         # ── VAE-only quick mode: collect → VAE → viz panel ────────────────────
-        cfg.env.n_rollouts  = 15
-        cfg.env.max_steps   = args.max_steps
-        cfg.vae.epochs      = 2
-        cfg.vae.batch_size  = 32
+        cfg.env.n_rollouts       = 200
+        cfg.env.max_steps        = args.max_steps
+        cfg.env.collection_mode   = "biased"
+        cfg.vae.epochs           = 10
+        cfg.vae.batch_size       = 128
 
         console.print(Panel(
             "[bold green]Quick VAE demo[/]\n"
-            f"15 rollouts × {args.max_steps} steps  |  VAE 2 epochs\n"
-            "[dim]Use --full to run all steps and watch the agent play[/]",
-            title="~2 min smoke test",
+            f"200 rollouts × {args.max_steps} steps  |  biased collection  |  VAE 10 epochs\n"
+            "[dim]Matches the stronger quick-full preset for the VAE stage[/]",
+            title="~10-20 min smoke test",
         ))
 
         console.rule("[bold cyan]1/3  Collect")

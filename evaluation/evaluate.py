@@ -41,7 +41,9 @@ def run_episode(
     )
     obs, _ = env.reset(seed=seed)
 
-    h_state = rnn.initial_state(1, device)
+    # If debug_action is set we deliberately skip model-dependent code so
+    # the environment can be exercised without any checkpoints.
+    h_state = None if debug_action is not None else rnn.initial_state(1, device)
     total_reward = 0.0
     z_traj, h_traj, rewards = [], [], []
     step = 0
@@ -71,25 +73,24 @@ def run_episode(
                 if not running:
                     break
 
-            # ── Model step ───────────────────────────────────────────────────
-            frame = preprocess_frame(obs, cfg.env.img_size)
-            x = torch.from_numpy((frame.astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
-
-            with torch.no_grad():
-                z = vae.get_latent(x)
-                h_vec = h_state[0][-1]
-                if debug_action is not None:
-                    action = np.array(debug_action, dtype=np.float32)
-                else:
+            # ── Model step (or debug override) ───────────────────────────────
+            if debug_action is not None:
+                action = np.array(debug_action, dtype=np.float32)
+            else:
+                frame = preprocess_frame(obs, cfg.env.img_size)
+                x = torch.from_numpy((frame.astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
+                with torch.no_grad():
+                    z = vae.get_latent(x)
+                    h_vec = h_state[0][-1]
                     action = ctrl(z, h_vec).squeeze(0).cpu().numpy()
-                _, _, _, h_state = rnn.forward_step(
-                    z, torch.from_numpy(action).unsqueeze(0).to(device), h_state
-                )
+                    _, _, _, h_state = rnn.forward_step(
+                        z, torch.from_numpy(action).unsqueeze(0).to(device), h_state
+                    )
 
-            z_np = z.squeeze(0).cpu().numpy()
-            h_np = h_vec.squeeze(0).cpu().numpy()
-            z_traj.append(z_np)
-            h_traj.append(h_np)
+                z_np = z.squeeze(0).cpu().numpy()
+                h_np = h_vec.squeeze(0).cpu().numpy()
+                z_traj.append(z_np)
+                h_traj.append(h_np)
 
             # Frame skip: hold action for N physics steps
             step_reward = 0.0
@@ -100,7 +101,6 @@ def run_episode(
                     break
             total_reward += step_reward
             rewards.append(step_reward)
-
             if render:
                 # rgb_array is already car-centered (96×96 crop)
                 raw = env.render()  # [96, 96, 3] uint8
@@ -134,6 +134,14 @@ def run_episode(
                 pygame.display.flip()
                 clock.tick(30)   # cap at 30 fps for readability
 
+            # Print a compact HUD line. In debug mode z/h aren't available.
+            if debug_action is not None:
+                print(
+                    f"step={step:4d} | "
+                    f"steer={action[0]:+.3f}  gas={action[1]:.3f}  brake={action[2]:.3f} | "
+                    f"reward={step_reward:+.2f}"
+                )
+            else:
                 print(
                     f"step={step:4d} | "
                     f"steer={action[0]:+.3f}  gas={action[1]:.3f}  brake={action[2]:.3f} | "
@@ -163,28 +171,46 @@ def run_episode(
 
 
 def evaluate(cfg, n_episodes: int = 10, render: bool = False, seed: Optional[int] = None,
-             debug_action: Optional[List] = None):
+             debug_action: Optional[List] = None, controller_mode: Optional[str] = None):
     """Load saved models and evaluate for n_episodes. Print summary table."""
     device = cfg.get_device()
 
-    for path, label in [
-        (cfg.paths.vae_checkpoint, "VAE"),
-        (cfg.paths.rnn_checkpoint, "MDN-RNN"),
-        (cfg.paths.controller_checkpoint, "Controller"),
-    ]:
-        if not Path(path).exists():
-            console.print(f"[red]Missing checkpoint: {path} ({label})")
-            return None
+    # If a debug action is supplied we don't require model checkpoints — the
+    # fixed-action mode is intended to verify the environment and rendering.
+    if debug_action is None:
+        # Allow explicit selection: controller_mode='dream' or 'real'. If not
+        # provided, fallback to existing auto-detect behavior (prefer dream).
+        if controller_mode == "dream":
+            ctrl_path = cfg.paths.controller_dream_checkpoint
+        elif controller_mode == "real":
+            ctrl_path = cfg.paths.controller_real_checkpoint
+        else:
+            ctrl_path = (
+                cfg.paths.controller_dream_checkpoint
+                if Path(cfg.paths.controller_dream_checkpoint).exists()
+                else cfg.paths.controller_real_checkpoint
+            )
 
-    vae = VAE(cfg.vae).to(device).eval()
-    vae.load_state_dict(load_checkpoint(cfg.paths.vae_checkpoint, device)["model"])
+        for path, label in [
+            (cfg.paths.vae_checkpoint, "VAE"),
+            (cfg.paths.rnn_checkpoint, "MDN-RNN"),
+            (ctrl_path, "Controller"),
+        ]:
+            if not Path(path).exists():
+                console.print(f"[red]Missing checkpoint: {path} ({label})")
+                return None
 
-    rnn = MDNRNN(cfg.rnn).to(device).eval()
-    rnn.load_state_dict(load_checkpoint(cfg.paths.rnn_checkpoint, device)["model"])
+        vae = VAE(cfg.vae).to(device).eval()
+        vae.load_state_dict(load_checkpoint(cfg.paths.vae_checkpoint, device)["model"])
 
-    ctrl = Controller(cfg.controller).to(device).eval()
-    ctrl.load_state_dict(load_checkpoint(cfg.paths.controller_checkpoint, device)["model"])
-    console.print("[green]All models loaded.")
+        rnn = MDNRNN(cfg.rnn).to(device).eval()
+        rnn.load_state_dict(load_checkpoint(cfg.paths.rnn_checkpoint, device)["model"])
+
+        ctrl = Controller(cfg.controller).to(device).eval()
+        ctrl.load_state_dict(load_checkpoint(ctrl_path, device)["model"])
+        console.print(f"[green]All models loaded. Controller used: {ctrl_path} (mode={controller_mode or 'auto'})")
+    else:
+        vae = rnn = ctrl = None
 
     if render:
         msg = f"[cyan]Opening game window ({cfg.env.window_width}×{cfg.env.window_height})  [dim]— ESC / ✕ to stop[/]"

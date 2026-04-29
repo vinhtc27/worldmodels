@@ -42,10 +42,15 @@ def _load_all(cfg, device):
     rnn  = MDNRNN(cfg.rnn).to(device).eval()
     ctrl = Controller(cfg.controller).to(device).eval()
 
+    ctrl_path = (
+        cfg.paths.controller_dream_checkpoint
+        if Path(cfg.paths.controller_dream_checkpoint).exists()
+        else cfg.paths.controller_real_checkpoint
+    )
     for path, model, label in [
-        (cfg.paths.vae_checkpoint,        vae,  "VAE"),
-        (cfg.paths.rnn_checkpoint,        rnn,  "MDN-RNN"),
-        (cfg.paths.controller_checkpoint, ctrl, "Controller"),
+        (cfg.paths.vae_checkpoint, vae,  "VAE"),
+        (cfg.paths.rnn_checkpoint, rnn,  "MDN-RNN"),
+        (ctrl_path,                ctrl, "Controller"),
     ]:
         if Path(path).exists():
             model.load_state_dict(load_checkpoint(path, device)["model"])

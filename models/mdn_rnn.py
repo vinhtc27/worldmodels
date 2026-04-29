@@ -182,4 +182,7 @@ class MDNRNN(nn.Module):
         mu_sel    = mu.gather(1, idx_exp).squeeze(1)     # [B, D]
         sigma_sel = sigma.gather(1, idx_exp).squeeze(1)  # [B, D]
 
-        return mu_sel + sigma_sel * torch.randn_like(mu_sel) * temperature
+        # Sample from the selected Gaussian component.
+        # Temperature is applied only to the component selection above.
+        noise = torch.randn_like(mu_sel)
+        return mu_sel + sigma_sel * noise

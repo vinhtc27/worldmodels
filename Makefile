@@ -1,4 +1,4 @@
-.PHONY: help install clean clean-checkpoint clean-data clean-log clean-research clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves research research-random research-bias
+.PHONY: help install clean clean-checkpoint clean-data clean-log clean-research clean-all collect train-vae train-rnn train-ctrl train eval watch debug quick full quick-collect quick-vae quick-rnn quick-ctrl quick-ctrl-real eval-dream eval-real watch-dream watch-real viz-recon viz-replay viz-latent viz-walk viz-dream viz-curves research research-random research-bias
 
 PYTHON = .venv/bin/python
 VENV   = .venv
@@ -19,12 +19,13 @@ help:
 	@echo "    make clean-all        Remove everything including venv"
 	@echo ""
 	@echo "  Quick runs"
-	@echo "    make quick            Collect + train VAE (~2 min), open viz"
-	@echo "    make full             Full pipeline with minimal settings (~10 min), watch agent play"
-	@echo "    make quick-collect    Collect 15 rollouts"
-	@echo "    make quick-vae        Train VAE for 2 epochs"
-	@echo "    make quick-rnn        Train MDN-RNN for 3 epochs"
-	@echo "    make quick-ctrl       Train controller: 5 gens x pop 4"
+	@echo "    make quick            Collect + train VAE (200 biased rollouts × 1000 steps, 10 epochs), open viz"
+	@echo "    make full             Full pipeline (~30-60 min), watch agent play"
+	@echo "    make quick-collect    Collect 200 biased rollouts × 1000 steps"
+	@echo "    make quick-vae        Train VAE for 10 epochs (batch 128)"
+	@echo "    make quick-rnn        Train MDN-RNN for 20 epochs (batch 64)"
+	@echo "    make quick-ctrl       Train controller: 50 gens x pop 16 x 4 eval (dream mode)"
+	@echo "    make quick-ctrl-real  Train controller: 50 gens x pop 16 x 4 eval (real env)"
 	@echo "    make debug            Verify gym works: fixed steer/gas/brake, ignores controller"
 	@echo ""
 	@echo "  Pipeline (step by step)"
@@ -114,16 +115,19 @@ train-ctrl:
 	$(PYTHON) main.py train-ctrl
 
 quick-collect:
-	$(PYTHON) main.py collect --n-rollouts 15 --n-workers 4
+	$(PYTHON) main.py collect --n-rollouts 200 --collection-mode biased
 
 quick-vae:
-	$(PYTHON) main.py train-vae --epochs 2
+	$(PYTHON) main.py train-vae --epochs 10 --batch-size 128
 
 quick-rnn:
-	$(PYTHON) main.py train-rnn --epochs 3
+	$(PYTHON) main.py train-rnn --epochs 20 --batch-size 64
 
 quick-ctrl:
-	$(PYTHON) main.py train-ctrl --generations 5 --pop-size 4
+	$(PYTHON) main.py train-ctrl --generations 50 --pop-size 16 --n-eval-episodes 4
+
+quick-ctrl-real:
+	$(PYTHON) main.py train-ctrl --generations 50 --pop-size 16 --n-eval-episodes 4 --real-env
 
 train: train-vae train-rnn train-ctrl
 
@@ -159,11 +163,25 @@ research-bias:
 
 # ── Evaluate ──────────────────────────────────────────────────────────────────
 
+CONTROLLER ?=
+
 eval:
-	$(PYTHON) main.py eval --episodes 100
+	$(PYTHON) main.py eval --episodes 100 $(if $(CONTROLLER),--controller-mode $(CONTROLLER),)
+
+eval-dream:
+	$(PYTHON) main.py eval --episodes 100 --controller-mode dream
+
+eval-real:
+	$(PYTHON) main.py eval --episodes 100 --controller-mode real
 
 watch:
 	$(PYTHON) main.py eval --render --episodes 3
+
+watch-dream:
+	$(PYTHON) main.py eval --render --episodes 3 --controller-mode dream
+
+watch-real:
+	$(PYTHON) main.py eval --render --episodes 3 --controller-mode real
 
 # ── Visualize ─────────────────────────────────────────────────────────────────
 

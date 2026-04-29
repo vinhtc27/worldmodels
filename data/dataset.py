@@ -37,14 +37,15 @@ def _build_frame_cache(paths: List[str], out_path: Path) -> None:
 
     console.print(f"[cyan]Building frame cache: {total:,} frames → {out_path.name} ...")
 
-    # Pass 2: stream each obs into the mmap file
-    out = np.lib.format.open_memmap(str(out_path), mode="w+", dtype=np.float32,
+    # Pass 2: stream each obs into the mmap file.
+    # Keep the cache in uint8 to avoid a 4x expansion on disk and in the OS page cache.
+    out = np.lib.format.open_memmap(str(out_path), mode="w+", dtype=np.uint8,
                                     shape=(total,) + shape)
     offset = 0
     for p in paths:
         obs = np.load(p)["obs"]
         n = len(obs)
-        out[offset : offset + n] = obs.astype(np.float32) / 255.0
+        out[offset : offset + n] = obs
         offset += n
         del obs
     del out  # flush to disk
@@ -63,12 +64,21 @@ class FrameDataset(Dataset):
     def __init__(self, rollout_paths: List[str]):
         paths = list(rollout_paths)
         if not paths:
-            self._obs = np.empty((0, 64, 64, 3), dtype=np.float32)
+            self._obs = np.empty((0, 64, 64, 3), dtype=np.uint8)
             return
 
         out_path = Path(paths[0]).parent / "all_obs.npy"
+        expected_shape = np.load(paths[0])["obs"].shape[1:]
         newest_rollout = max(Path(p).stat().st_mtime for p in paths)
-        if not out_path.exists() or out_path.stat().st_mtime < newest_rollout:
+        needs_rebuild = True
+        if out_path.exists() and out_path.stat().st_mtime >= newest_rollout:
+            try:
+                cached = np.load(str(out_path), mmap_mode="r")
+                needs_rebuild = cached.dtype != np.uint8 or cached.shape[1:] != expected_shape
+            except Exception:
+                needs_rebuild = True
+
+        if needs_rebuild:
             _build_frame_cache(paths, out_path)
 
         self._obs = np.load(str(out_path), mmap_mode="r")
@@ -77,8 +87,8 @@ class FrameDataset(Dataset):
         return len(self._obs)
 
     def __getitem__(self, idx):
-        # .copy() required: mmap arrays are read-only, torch.from_numpy needs writable
-        frame = self._obs[idx].transpose(2, 0, 1).copy()
+        # Normalize on read so the cache stays compact while the model still sees float32 [0, 1].
+        frame = self._obs[idx].transpose(2, 0, 1).astype(np.float32) / 255.0
         return torch.from_numpy(frame)
 
 

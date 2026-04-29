@@ -67,7 +67,12 @@ class MetricLogger:
     def update(self, **kwargs):
         """Buffer per-batch values — averaged at commit time."""
         for k, v in kwargs.items():
-            self._step_buf.setdefault(k, []).append(float(v))
+            # If v is a tensor (possibly requires_grad), detach and move to CPU
+            if isinstance(v, torch.Tensor):
+                v_val = v.detach().cpu().item()
+            else:
+                v_val = float(v)
+            self._step_buf.setdefault(k, []).append(v_val)
 
     def commit(self, epoch: int):
         """Average buffered values and append to history. Returns the epoch row."""

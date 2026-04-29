@@ -78,6 +78,12 @@ class ControllerConfig:
     sigma0:           float = 0.1   # initial search radius in parameter space
     n_eval_episodes:  int   = 4     # episodes per candidate (paper uses 16; 4 ok for quick runs)
     n_workers:        int   = field(default_factory=lambda: os.cpu_count() or 4)  # parallel worker processes (set 1 to disable)
+    # Dream mode — run controller entirely in latent space (no real env, ~50× faster)
+    dream_mode:        bool  = True   # default; pass --real-env to disable
+    dream_max_steps:   int   = 400    # steps per dream episode
+    dream_temperature: float = 1.15   # RNN sampling temperature (paper value)
+    # Reward model training (used when reward model checkpoint missing)
+    reward_model_epochs: int = 25
 
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
@@ -87,9 +93,11 @@ class PathConfig:
     data_dir:               str = "data/rollouts"
     checkpoint_dir:         str = "checkpoint"
     log_dir:                str = "log"
-    vae_checkpoint:         str = "checkpoint/vae_best.pt"
-    rnn_checkpoint:         str = "checkpoint/rnn_best.pt"
-    controller_checkpoint:  str = "checkpoint/controller_best.pt"
+    vae_checkpoint:               str = "checkpoint/vae_best.pt"
+    rnn_checkpoint:               str = "checkpoint/rnn_best.pt"
+    controller_dream_checkpoint:  str = "checkpoint/controller_dream_best.pt"
+    controller_real_checkpoint:   str = "checkpoint/controller_real_best.pt"
+    reward_model_checkpoint:      str = "checkpoint/reward_model_best.pt"
 
 
 # ─── Master Config ────────────────────────────────────────────────────────────
