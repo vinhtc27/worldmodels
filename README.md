@@ -215,7 +215,7 @@ Training happens in three sequential stages:
 4. Train C  →  CMA-ES evolves the controller (dream mode by default)
 ```
 
-**Dream mode (default):** The controller is evaluated entirely inside the learned world model — no real environment needed during controller training. A small reward model `R(z, h, a) → r` is trained automatically on encoded rollouts (if missing), then CMA-ES evolves the controller by rolling out **C+M+R** in latent space. This is ~50× faster than real-env evaluation.
+**Dream mode (default):** The controller is evaluated entirely inside the learned world model — no real environment needed during controller training. A small reward model $R(z, h, a) \to \hat{r}$ is trained automatically on encoded rollouts (if missing), then CMA-ES evolves the controller by rolling out **C+M+R** in latent space. This is ~50× faster than real-env evaluation.
 
 **Real-env mode (`--real-env`):** The original approach — run full CarRacing episodes, encode each frame via V, maintain hidden state via M, and use ground-truth rewards. Slower but uses no learned reward approximation.
 
@@ -227,82 +227,61 @@ The following equations formalize each component of the architecture and the tra
 
 **VAE (V model):**
 
-$$
-q_\phi(z_t \mid x_t), \quad p_\theta(x_t \mid z_t)
-$$
+$$q_\phi(z_t \mid x_t), \qquad p_\theta(x_t \mid z_t)$$
 
 - $q_\phi(z_t \mid x_t)$ is the encoder distribution that maps an observation $x_t$ to a latent code $z_t$.
-
 - $p_\theta(x_t \mid z_t)$ is the decoder distribution that reconstructs the observation from the latent.
 
 The VAE is trained by maximizing the Evidence Lower BOund (ELBO):
-$$
-\mathcal{L}_{\mathrm{VAE}}
-=
-\mathbb{E}_{q_\phi(z_t\mid x_t)}\big[\log p_\theta(x_t\mid z_t)\big]
-- \beta\, D_{\mathrm{KL}}\!\big(q_\phi(z_t\mid x_t)\,\|\,\mathcal{N}(0,I)\big)
-$$
 
-- This repo uses $\beta=1.0$ with KL tolerance (free-bits style stabilization) in training.
+$$\mathcal{L}_{\text{VAE}} = \mathbb{E}_{q_\phi(z_t \mid x_t)}\left[\log p_\theta(x_t \mid z_t)\right] - \beta \, D_{\text{KL}}\left(q_\phi(z_t \mid x_t) \;\middle\|\; \mathcal{N}(0, I)\right)$$
 
+- This repo uses $\beta = 1.0$ with KL tolerance (free-bits style stabilization) in training.
 - The first term is the reconstruction term: it rewards the decoder for matching the input frame.
-
 - The second term is the KL divergence term: it regularizes the latent space by pushing the posterior toward a standard normal prior.
 
 **MDN-RNN (M model):**
 
-$$
-h_{t+1} = f_{\mathrm{LSTM}}\big(h_t, [z_t, a_t]\big)
-$$
+$$h_{t+1} = f_{\text{LSTM}}\left(h_t,\, [z_t,\, a_t]\right)$$
 
-- $f_{\mathrm{LSTM}}$ is the recurrent update. It combines the previous hidden state $h_t$ with the current latent $z_t$ and action $a_t$, then produces the next hidden state $h_{t+1}$.
+- $f_{\text{LSTM}}$ is the recurrent update. It combines the previous hidden state $h_t$ with the current latent $z_t$ and action $a_t$, then produces the next hidden state $h_{t+1}$.
 
-$$
-p(z_{t+1}\mid z_t,a_t,h_t)
-=
-\sum_{k=1}^{K} \pi_{t,k}\,\mathcal{N}\!\big(z_{t+1};\mu_{t,k},\sigma_{t,k}^2 I\big)
-$$
+$$p(z_{t+1} \mid z_t, a_t, h_t) = \sum_{k=1}^{K} \pi_{t,k} \, \mathcal{N}\!\left(z_{t+1};\, \mu_{t,k},\, \sigma_{t,k}^2 I\right)$$
 
 - This is the MDN output. $K$ is the number of Gaussian components, $\pi_{t,k}$ are the mixture weights, $\mu_{t,k}$ are the component means, and $\sigma_{t,k}$ are the component standard deviations.
 - The RNN is trained by negative log-likelihood of $z_{t+1}$ under this mixture.
 
 **Controller (C model):**
 
-$$
-a_t = \tanh\big(W[z_t;h_t] + b\big)
-$$
+$$a_t = W_c \left[z_t;\, h_t\right] + b_c$$
 
-- This is the controller. The vector $[z_t; h_t]$ concatenates the latent and hidden state, $W$ is the learned weight matrix, and $b$ is the bias.
-- $\tanh$ keeps each action head in $[-1,1]$; CarRacing then clips gas and brake to $[0,1]$.
+- This is the controller as defined in the paper. The vector $[z_t;\, h_t]$ concatenates the latent and hidden state, $W_c$ is the weight matrix, and $b_c$ is the bias.
+- In this implementation, a component-wise $\tanh$ is applied to keep each action head in $[-1, 1]$; CarRacing then clips gas and brake to $[0, 1]$. This is an implementation detail not in the original paper's formula.
 
 **CMA-ES objective:**
 
-$$
-  \theta^* = \arg\max_{\theta}\; \mathbb{E}_{\tau\sim p_\theta(\tau)}\Big[\sum_{t=0}^{T-1} r_t\Big]
-$$
+$$\theta^* = \arg\max_{\theta} \; \mathbb{E}_{\tau \sim p_\theta(\tau)}\left[\sum_{t=0}^{T-1} r_t\right]$$
 
 - $\theta$ is a candidate controller parameter vector and $\theta^*$ is the optimal parameter vector found by CMA-ES.
 - $\tau$ denotes a sampled trajectory, so $p_\theta(\tau)$ is the trajectory distribution induced by controller parameters $\theta$.
-- The sum $\sum_{t=0}^{T-1} r_t$ is the return over one rollout.
+- The sum $\sum_{t=0}^{T-1} r_t$ is the cumulative return over one rollout.
 
-In practice CMA-ES approximates this expectation by evaluating many rollouts per candidate $\theta$; the MDN-RNN sampling temperature $T_{\mathrm{MDN}}$ affects the trajectory distribution $p_\theta(\tau)$ but is not a direct input to the reward model.
+In practice CMA-ES approximates this expectation by evaluating many rollouts per candidate $\theta$; the MDN-RNN sampling temperature $T_{\text{MDN}}$ affects the trajectory distribution $p_\theta(\tau)$ but is not a direct input to the reward model.
 
 **Dream-mode reward extension (CarRacing in this repo):**
 
 The original paper did not use dream-mode controller training for CarRacing. In this repo, dream mode adds a learned reward model:
 
-$$
-\hat r_t = R_\psi(z_t,h_t,a_t)
-$$
+$$\hat{r}_t = R_\psi(z_t,\, h_t,\, a_t)$$
 
-- $R_\psi$ is the learned reward model. It takes the current latent $z_t$, hidden state $h_t$, and action $a_t$, then predicts the per-step reward $\hat r_t$.
-- The MDN-RNN still samples future latents with temperature $T_{\mathrm{MDN}}$.
+- $R_\psi$ is the learned reward model. It takes the current latent $z_t$, hidden state $h_t$, and action $a_t$, then predicts the per-step reward $\hat{r}_t$.
+- The MDN-RNN still samples future latents with temperature $T_{\text{MDN}}$.
 
 ### Dreaming
 
 Once V and M are trained, the agent can "dream" — rolling out latent futures in model space, bypassing the real environment. In the paper, dream training is demonstrated for VizDoom; in this repo we extend the idea to CarRacing by adding a learned reward model so the controller can be evaluated in latent space.
 
-Concretely, the reward model is a small MLP that maps `(z_t, h_t, a_t) -> r_t`. Training uses encoded rollouts: we run the frozen MDN-RNN forward to compute the hidden state *before* each step (`h_prev`), pair `(z, h_prev, a)` with the recorded per-step reward, and optimize mean-squared error (MSE) with Adam. The training script batches samples (default batch size 512), holds out a small validation split, and saves the best checkpoint. Once trained, `R(z,h,a)` supplies per-step rewards during dream rollouts while the MDN-RNN samples next latents (with configurable temperature $T_{\mathrm{MDN}}$).
+Concretely, the reward model is a small MLP that maps $(z_t, h_t, a_t) \to r_t$. Training uses encoded rollouts: we run the frozen MDN-RNN forward to compute the hidden state *before* each step ($h_{\text{prev}}$), pair $(z, h_{\text{prev}}, a)$ with the recorded per-step reward, and optimize mean-squared error (MSE) with Adam. The training script batches samples (default batch size 512), holds out a small validation split, and saves the best checkpoint. Once trained, $R(z, h, a)$ supplies per-step rewards during dream rollouts while the MDN-RNN samples next latents (with configurable temperature $T_{\text{MDN}}$).
 
 ---
 
@@ -358,11 +337,11 @@ At every step the real Box2D simulator produces a pixel frame. The VAE encodes i
   └─────────────────────────────────────────────────────────┘
 ```
 
-No real environment. No VAE. The RNN replaces the physics engine — given `(z_t, a_t, h_t)` it samples the next latent `z_{t+1}` from its learned MDN mixture. The reward model predicts `r̂` from the agent's internal state. Everything is pure tensor ops on CPU.
+No real environment. No VAE. The RNN replaces the physics engine — given $(z_t, a_t, h_t)$ it samples the next latent $z_{t+1}$ from its learned MDN mixture. The reward model predicts $\hat{r}$ from the agent's internal state. Everything is pure tensor ops on CPU.
 
 **Pros:** ~50× faster — no physics, no rendering, no VAE inference per step.
 
-**Cons:** Reward is approximate; controller can exploit model imperfections. RNN temperature $T_{\mathrm{MDN}}=1.15$ adds stochasticity to the dream, making exploitation harder.
+**Cons:** Reward is approximate; controller can exploit model imperfections. RNN temperature $T_{\text{MDN}} = 1.15$ adds stochasticity to the dream, making exploitation harder.
 
 ### Architectural summary
 
@@ -371,7 +350,7 @@ No real environment. No VAE. The RNN replaces the physics engine — given `(z_t
 | Real environment | ✓ (Box2D physics) | ✗ |
 | VAE (frame → z) | ✓ per step | ✗ (z from RNN) |
 | RNN (hidden state h) | ✓ memory only | ✓ dynamics + memory |
-| Reward model | ✗ | ✓ R(z,h,a)→r̂ |
+| Reward model | ✗ | ✓ $R(z,h,a) \to \hat{r}$ |
 | Reward source | ground truth | learned approximation |
 | Speed per generation | slow (real episodes) | fast (tensor rollouts) |
 | Risk | none | model exploitation |
@@ -380,15 +359,11 @@ No real environment. No VAE. The RNN replaces the physics engine — given `(z_t
 
 The original paper implements dream training only for VizDoom (DoomTakeCover), not CarRacing. The reason is subtle: **the dream world needs a reward signal**, and the two tasks provide it very differently.
 
-In VizDoom the reward is simply survival time — the agent gets +1 for every frame it stays alive. The paper modifies the MDN-RNN to also predict a binary `done` signal (did the agent die this frame?). With that, the dream world has everything it needs:
+In VizDoom the reward is simply survival time — the agent gets +1 for every frame it stays alive. The paper modifies the MDN-RNN to also predict a binary `done` signal (did the agent die this frame?). With that, the dream world has everything it needs: the full VizDoom dream loop is `RNN predicts (z_next, done)` — no reward model needed, just count steps until `done = True`.
 
-The paper also has the MDN-RNN predict a binary `done_t` signal (whether the agent dies this frame) alongside the next latent `z_{t+1}`, providing a natural termination signal for dreams.
+**CarRacing is harder.** The reward is continuous ($+1000/N$ per new tile crossed, $-0.1$ per frame), depends on track position, and has no clean binary signal the RNN can easily predict. The paper sidesteps this entirely by keeping CarRacing in the real environment.
 
-So the full VizDoom dream loop is: `RNN predicts (z_next, done)` — no reward model needed, just count steps until `done = True`.
-
-**CarRacing is harder.** The reward is continuous (`+1000/N` per new tile crossed, `−0.1` per frame), depends on track position, and has no clean binary signal the RNN can easily predict. The paper sidesteps this entirely by keeping CarRacing in the real environment.
-
-**Our solution — a learned reward model `R(z, h, a) → r̂`:** We train a small MLP on the encoded rollouts to approximate the per-step reward from the agent's internal state. This lets us bring dream training to CarRacing at the cost of reward approximation error. The paper also observes that using a higher MDN-RNN sampling temperature $T_{\mathrm{MDN}}$ during dream rollouts can reduce exploitation of model errors and often yields controllers that generalize better to normal settings.
+**Our solution — a learned reward model $R_\psi(z, h, a) \to \hat{r}$:** We train a small MLP on the encoded rollouts to approximate the per-step reward from the agent's internal state. This lets us bring dream training to CarRacing at the cost of reward approximation error. The paper also observes that using a higher MDN-RNN sampling temperature $T_{\text{MDN}}$ during dream rollouts can reduce exploitation of model errors and often yields controllers that generalize better to normal settings.
 
 The reward model is an extension beyond the paper. Use `--real-env` if you want to match the paper's exact CarRacing setup.
 
