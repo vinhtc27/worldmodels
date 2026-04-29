@@ -118,9 +118,30 @@ def collect_rollouts(cfg, n_rollouts: Optional[int] = None, tag: str = "train"):
     Returns: list of rollout file paths
     """
     n_rollouts = n_rollouts or cfg.env.n_rollouts
-    n_workers  = min(getattr(cfg.env, "n_workers", 1), n_rollouts)
     save_dir   = Path(cfg.paths.data_dir) / tag
     save_dir.mkdir(parents=True, exist_ok=True)
+
+    # Determine which indices are missing
+    existing_indices = {
+        int(p.stem.split("_")[1])
+        for p in save_dir.glob("rollout_?????.npz")
+        if not p.stem.endswith("_encoded")
+    }
+    missing = [i for i in range(n_rollouts) if i not in existing_indices]
+
+    if not missing:
+        console.print(f"[green]Already have {n_rollouts} rollouts in {save_dir} — skipping collection.")
+        return [str(save_dir / f"rollout_{i:05d}.npz") for i in range(n_rollouts)]
+
+    if len(missing) < n_rollouts:
+        sample = missing[:5]
+        more = f"…+{len(missing)-5}" if len(missing) > 5 else ""
+        console.print(
+            f"[yellow]Found {n_rollouts - len(missing)}/{n_rollouts} rollouts. "
+            f"Collecting {len(missing)} missing (indices: {sample}{more})[/]"
+        )
+
+    n_workers  = min(getattr(cfg.env, "n_workers", 1), len(missing))
 
     with Progress(
         SpinnerColumn(),
@@ -130,7 +151,7 @@ def collect_rollouts(cfg, n_rollouts: Optional[int] = None, tag: str = "train"):
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("rollouts", total=n_rollouts)
+        task = progress.add_task("rollouts", total=len(missing))
 
         if n_workers <= 1:
             # Sequential — no spawn overhead, best for small runs
@@ -139,7 +160,7 @@ def collect_rollouts(cfg, n_rollouts: Optional[int] = None, tag: str = "train"):
             rng = np.random.default_rng(seed=None)
             paths = []
 
-            for i in range(n_rollouts):
+            for i in missing:
                 obs_list, act_list, rew_list, done_list = [], [], [], []
                 obs, _ = env.reset()
                 policy = _CarRacingPolicy(rng)
@@ -182,22 +203,23 @@ def collect_rollouts(cfg, n_rollouts: Optional[int] = None, tag: str = "train"):
             args_list = [
                 (i, cfg.env.name, cfg.env.render_mode, cfg.env.max_steps,
                  cfg.env.frame_skip, cfg.env.img_size, str(save_dir), i, cfg.env.reward_cutoff)
-                for i in range(n_rollouts)
+                for i in missing
             ]
-            paths = [None] * n_rollouts
+            paths = [None] * len(missing)
             with ProcessPoolExecutor(max_workers=n_workers) as executor:
-                futures = {executor.submit(_collect_one, a): i for i, a in enumerate(args_list)}
+                futures = {executor.submit(_collect_one, a): idx for idx, a in enumerate(args_list)}
                 for fut in as_completed(futures):
-                    i = futures[fut]
-                    paths[i] = fut.result()
+                    idx = futures[fut]
+                    paths[idx] = fut.result()
                     progress.advance(task)
             paths = [p for p in paths if p is not None]
 
     console.print(
-        f"[green]Saved {n_rollouts} rollouts → {save_dir}"
+        f"[green]Saved {len(missing)} new rollouts → {save_dir}"
         + (f"  (workers={n_workers})" if n_workers > 1 else "")
+        + f"  (total: {n_rollouts})"
     )
-    return paths
+    return [str(save_dir / f"rollout_{i:05d}.npz") for i in range(n_rollouts)]
 
 
 def get_rollout_paths(cfg, tag: str = "train"):
