@@ -19,7 +19,7 @@ class EnvConfig:
     max_steps: int  = 1000          # episode cutoff (1000 steps × frame_skip=4 = 4000 frames)
     n_rollouts: int = 200           # random rollouts to collect for VAE/RNN training
     n_workers:  int = field(default_factory=lambda: os.cpu_count() or 4)  # parallel workers for rollout collection
-    reward_cutoff: float = -100.0   # cut episode early if cumulative reward drops below this (paper: -100)
+    collection_mode: str = "random" # "random": pure iid sampling (paper); "biased": hold actions 8 steps, bias gas/brake
 
     # Render window size (used during eval --render)
     window_width:  int = 500

@@ -75,6 +75,8 @@ def build_parser():
     p_collect.add_argument("--n-workers",  type=int, default=None,
                            help="Parallel workers (1=sequential, >1 multiprocessing)")
     p_collect.add_argument("--tag", default="train", help="Dataset split tag")
+    p_collect.add_argument("--collection-mode", choices=["random", "biased"], default=None,
+                           help="random: pure iid (paper); biased: hold actions 8 steps, high gas (default: cfg value)")
 
     # ── train-vae ─────────────────────────────────────────────────────────────
     p_vae = sub.add_parser("train-vae", help="Train the VAE (Vision Model)")
@@ -212,6 +214,8 @@ def cmd_collect(args, cfg):
     n = args.n_rollouts or cfg.env.n_rollouts
     if args.n_workers is not None:
         cfg.env.n_workers = args.n_workers
+    if args.collection_mode is not None:
+        cfg.env.collection_mode = args.collection_mode
     console.print(Panel(f"Collecting [cyan]{n}[/] rollouts  (env: [bold]{cfg.env.name}[/], workers=[cyan]{cfg.env.n_workers}[/])"))
     collect_rollouts(cfg, n_rollouts=n, tag=args.tag)
 

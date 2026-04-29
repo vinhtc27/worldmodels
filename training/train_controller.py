@@ -73,7 +73,6 @@ def _evaluate_params(args):
         h_state  = rnn.initial_state(1, device)
         ep_reward = 0.0
 
-        cumulative_reward = 0.0
         for _ in range(cfg_env.max_steps):
             frame = preprocess_frame(obs, cfg_env.img_size)
             x = torch.from_numpy((frame.astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
@@ -92,8 +91,7 @@ def _evaluate_params(args):
                 if term or trunc:
                     break
             ep_reward += step_reward
-            cumulative_reward += step_reward
-            if term or trunc or cumulative_reward < cfg_env.reward_cutoff:
+            if term or trunc:
                 break
 
         total_reward += ep_reward

@@ -4,7 +4,7 @@ Each rollout: obs [T, H, W, C], actions [T, A], rewards [T], dones [T]
 """
 import numpy as np
 import gymnasium as gym
-import cv2
+from PIL import Image
 from pathlib import Path
 from typing import Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -20,26 +20,38 @@ console = Console()
 
 def preprocess_frame(frame: np.ndarray, size: int) -> np.ndarray:
     """Resize frame to [size×size] and return as uint8."""
-    return cv2.resize(frame, (size, size), interpolation=cv2.INTER_LINEAR)
+    return np.array(Image.fromarray(frame).resize((size, size), Image.BILINEAR), dtype=np.uint8)
 
 
 class _CarRacingPolicy:
     """
-    Simple biased-random policy for CarRacing that actually drives.
-    Holds steering/gas for several steps so the car moves meaningfully.
+    Random policy for CarRacing.
+
+    mode="biased": holds actions for `repeat` steps, biases gas high and brake low
+                   so the car actually moves — good for quick runs.
+    mode="random": pure iid sampling each step across full action space (paper method).
     """
-    def __init__(self, rng: np.random.Generator, repeat: int = 8):
+    def __init__(self, rng: np.random.Generator, mode: str = "biased", repeat: int = 8):
         self.rng = rng
+        self.mode = mode
         self.repeat = repeat
-        self._action = np.array([0.0, 0.5, 0.0])
+        self._action = np.array([0.0, 0.5, 0.0], dtype=np.float32)
         self._countdown = 0
 
     def __call__(self) -> np.ndarray:
+        if self.mode == "random":
+            return np.array([
+                float(self.rng.uniform(-1, 1)),
+                float(self.rng.uniform(0, 1)),
+                float(self.rng.uniform(0, 1)),
+            ], dtype=np.float32)
+        # biased
         if self._countdown == 0:
-            steer = float(self.rng.uniform(-1, 1))
-            gas   = float(self.rng.uniform(0.5, 1.0))
-            brake = float(self.rng.uniform(0.0, 0.1))
-            self._action = np.array([steer, gas, brake], dtype=np.float32)
+            self._action = np.array([
+                float(self.rng.uniform(-1, 1)),
+                float(self.rng.uniform(0.5, 1.0)),
+                float(self.rng.uniform(0.0, 0.1)),
+            ], dtype=np.float32)
             self._countdown = self.repeat
         self._countdown -= 1
         return self._action.copy()
@@ -47,15 +59,15 @@ class _CarRacingPolicy:
 
 def _collect_one(args):
     """Worker: collect and save one rollout. Self-contained for subprocess pickling."""
-    idx, env_name, render_mode, max_steps, frame_skip, img_size, save_dir, seed, reward_cutoff = args
+    idx, env_name, render_mode, max_steps, frame_skip, img_size, save_dir, seed, collection_mode = args
 
     import numpy as np
     import gymnasium as gym
-    import cv2
+    from PIL import Image
     from pathlib import Path
 
     def _preprocess(frame, size):
-        return cv2.resize(frame, (size, size), interpolation=cv2.INTER_LINEAR)
+        return np.array(Image.fromarray(frame).resize((size, size), Image.BILINEAR), dtype=np.uint8)
 
     env = gym.make(env_name, render_mode=render_mode,
                    max_episode_steps=max_steps * frame_skip)
@@ -67,18 +79,24 @@ def _collect_one(args):
 
     obs_list, act_list, rew_list, done_list = [], [], [], []
     obs, _ = env.reset(seed=int(rng.integers(0, 2**31)))
-    cumulative_reward = 0.0
 
     for _ in range(max_steps):
-        if countdown == 0:
-            cur_action = np.array([
+        if collection_mode == "random":
+            action = np.array([
                 float(rng.uniform(-1, 1)),
-                float(rng.uniform(0.5, 1.0)),
-                float(rng.uniform(0.0, 0.1)),
+                float(rng.uniform(0, 1)),
+                float(rng.uniform(0, 1)),
             ], dtype=np.float32)
-            countdown = repeat
-        countdown -= 1
-        action = cur_action.copy()
+        else:
+            if countdown == 0:
+                cur_action = np.array([
+                    float(rng.uniform(-1, 1)),
+                    float(rng.uniform(0.5, 1.0)),
+                    float(rng.uniform(0.0, 0.1)),
+                ], dtype=np.float32)
+                countdown = repeat
+            countdown -= 1
+            action = cur_action.copy()
 
         total_reward = 0.0
         done = False
@@ -89,13 +107,12 @@ def _collect_one(args):
             if done:
                 break
 
-        cumulative_reward += total_reward
         obs_list.append(_preprocess(obs, img_size))
         act_list.append(action)
         rew_list.append(total_reward)
         done_list.append(done)
         obs = next_obs
-        if done or cumulative_reward < reward_cutoff:
+        if done:
             break
 
     path = Path(save_dir) / f"rollout_{idx:05d}.npz"
@@ -112,7 +129,7 @@ def _collect_one(args):
 
 def collect_rollouts(cfg, n_rollouts: Optional[int] = None, tag: str = "train"):
     """
-    Collect rollouts using a biased-random driving policy and save to disk.
+    Collect rollouts using cfg.env.collection_mode policy ("biased" or "random") and save to disk.
     Uses n_workers parallel processes when cfg.env.n_workers > 1.
 
     Returns: list of rollout file paths
@@ -128,6 +145,8 @@ def collect_rollouts(cfg, n_rollouts: Optional[int] = None, tag: str = "train"):
         if not p.stem.endswith("_encoded")
     }
     missing = [i for i in range(n_rollouts) if i not in existing_indices]
+
+    console.print(f"[cyan]Collection mode: [bold]{cfg.env.collection_mode}[/bold] ({'pure iid, paper method' if cfg.env.collection_mode == 'random' else 'biased gas/brake, held 8 steps'})[/]")
 
     if not missing:
         console.print(f"[green]Already have {n_rollouts} rollouts in {save_dir} — skipping collection.")
@@ -163,8 +182,7 @@ def collect_rollouts(cfg, n_rollouts: Optional[int] = None, tag: str = "train"):
             for i in missing:
                 obs_list, act_list, rew_list, done_list = [], [], [], []
                 obs, _ = env.reset()
-                policy = _CarRacingPolicy(rng)
-                cumulative_reward = 0.0
+                policy = _CarRacingPolicy(rng, mode=cfg.env.collection_mode)
                 for _ in range(cfg.env.max_steps):
                     action = policy()
                     total_reward = 0.0
@@ -176,13 +194,12 @@ def collect_rollouts(cfg, n_rollouts: Optional[int] = None, tag: str = "train"):
                         if done:
                             break
 
-                    cumulative_reward += total_reward
                     obs_list.append(preprocess_frame(obs, cfg.env.img_size))
                     act_list.append(action)
                     rew_list.append(total_reward)
                     done_list.append(done)
                     obs = next_obs
-                    if done or cumulative_reward < cfg.env.reward_cutoff:
+                    if done:
                         break
 
                 path = save_dir / f"rollout_{i:05d}.npz"
@@ -202,7 +219,7 @@ def collect_rollouts(cfg, n_rollouts: Optional[int] = None, tag: str = "train"):
             # Parallel — each worker owns its own env, good for large runs
             args_list = [
                 (i, cfg.env.name, cfg.env.render_mode, cfg.env.max_steps,
-                 cfg.env.frame_skip, cfg.env.img_size, str(save_dir), i, cfg.env.reward_cutoff)
+                 cfg.env.frame_skip, cfg.env.img_size, str(save_dir), i, cfg.env.collection_mode)
                 for i in missing
             ]
             paths = [None] * len(missing)
