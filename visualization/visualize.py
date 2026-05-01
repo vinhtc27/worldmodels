@@ -13,13 +13,15 @@ import sys
 import numpy as np
 import torch
 import matplotlib
-# Use native macOS backend (no Tk/SDL dependency); fall back to Agg if headless
+# Use native macOS backend; on Linux/Windows try TkAgg only if tkinter is present,
+# otherwise fall back to non-interactive Agg (sufficient for --save paths).
 if sys.platform == "darwin":
     matplotlib.use("MacOSX")
 else:
     try:
+        import tkinter  # noqa: F401
         matplotlib.use("TkAgg")
-    except Exception:
+    except ImportError:
         matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
