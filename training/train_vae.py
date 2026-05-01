@@ -11,7 +11,7 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeEl
 
 from models import VAE
 from data import FrameDataset, get_rollout_paths
-from utils import set_seed, save_checkpoint, load_checkpoint, MetricLogger, print_model_summary
+from utils import set_seed, save_checkpoint, load_checkpoint, unwrap_state_dict, MetricLogger, print_model_summary
 
 console = Console()
 
@@ -166,7 +166,7 @@ def train_vae(cfg, resume: bool = False):
             # ── Checkpoint ────────────────────────────────────────────────────
             ckpt = {
                 "epoch": epoch,
-                "model": vae.state_dict(),
+                "model": unwrap_state_dict(vae),
                 "optimizer": optimizer.state_dict(),
                 "best_val": best_val,
             }

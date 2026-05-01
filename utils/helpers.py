@@ -24,6 +24,14 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
+def unwrap_state_dict(model: torch.nn.Module) -> Dict[str, Any]:
+    """Return state_dict without torch.compile's _orig_mod. prefix."""
+    sd = model.state_dict()
+    if any(k.startswith("_orig_mod.") for k in sd):
+        sd = {k.removeprefix("_orig_mod."): v for k, v in sd.items()}
+    return sd
+
+
 def save_checkpoint(state: Dict[str, Any], path: str):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     torch.save(state, path)
@@ -32,7 +40,10 @@ def save_checkpoint(state: Dict[str, Any], path: str):
 def load_checkpoint(path: str, device: str = "cpu") -> Dict[str, Any]:
     if not Path(path).exists():
         raise FileNotFoundError(f"Checkpoint not found: {path}")
-    return torch.load(path, map_location=device, weights_only=False)
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    if "model" in ckpt and any(k.startswith("_orig_mod.") for k in ckpt["model"]):
+        ckpt["model"] = {k.removeprefix("_orig_mod."): v for k, v in ckpt["model"].items()}
+    return ckpt
 
 
 def save_json(data: dict, path: str):

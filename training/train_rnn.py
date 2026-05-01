@@ -21,7 +21,7 @@ from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeEl
 
 from models import MDNRNN
 from data import LatentSequenceDataset
-from utils import set_seed, save_checkpoint, load_checkpoint, MetricLogger, print_model_summary
+from utils import set_seed, save_checkpoint, load_checkpoint, unwrap_state_dict, MetricLogger, print_model_summary
 
 console = Console()
 
@@ -156,7 +156,7 @@ def train_rnn(cfg, resume: bool = False):
             # ── Checkpoint ────────────────────────────────────────────────────
             ckpt = {
                 "epoch":     epoch,
-                "model":     rnn.state_dict(),
+                "model":     unwrap_state_dict(rnn),
                 "optimizer": optimizer.state_dict(),
                 "best_val":  best_val,
             }
