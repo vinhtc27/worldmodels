@@ -24,11 +24,15 @@ def set_seed(seed: int):
         torch.cuda.manual_seed_all(seed)
 
 
+def _strip_orig_mod(sd: Dict[str, Any]) -> Dict[str, Any]:
+    return {(k[len("_orig_mod."):] if k.startswith("_orig_mod.") else k): v for k, v in sd.items()}
+
+
 def unwrap_state_dict(model: torch.nn.Module) -> Dict[str, Any]:
     """Return state_dict without torch.compile's _orig_mod. prefix."""
     sd = model.state_dict()
     if any(k.startswith("_orig_mod.") for k in sd):
-        sd = {k.removeprefix("_orig_mod."): v for k, v in sd.items()}
+        sd = _strip_orig_mod(sd)
     return sd
 
 
@@ -42,7 +46,7 @@ def load_checkpoint(path: str, device: str = "cpu") -> Dict[str, Any]:
         raise FileNotFoundError(f"Checkpoint not found: {path}")
     ckpt = torch.load(path, map_location=device, weights_only=False)
     if "model" in ckpt and any(k.startswith("_orig_mod.") for k in ckpt["model"]):
-        ckpt["model"] = {k.removeprefix("_orig_mod."): v for k, v in ckpt["model"].items()}
+        ckpt["model"] = _strip_orig_mod(ckpt["model"])
     return ckpt
 
 
