@@ -40,6 +40,8 @@ help:
 	@echo "    make research-random  Pure random policy (paper): 10k rollouts | VAE 1ep | RNN 20ep | CMA-ES 1800gen×pop64×16eval"
 	@echo "    make research-bias    Biased policy (our custom): 10k rollouts | VAE 1ep | RNN 20ep | CMA-ES 1800gen×pop64×16eval"
 	@echo "                          All outputs saved to research/ (override: RESEARCH_DIR=path)"
+	@echo "                          Skip flags: SKIP_COLLECT=1  SKIP_VAE=1  SKIP_RNN=1  SKIP_CTRL=1  SKIP_EVAL=1"
+	@echo "                          Example: make research-random SKIP_COLLECT=1 SKIP_VAE=1 SKIP_RNN=1 SKIP_CTRL=1"
 	@echo ""
 	@echo "  Evaluate"
 	@echo "    make eval             Benchmark: 100 episodes headless (paper protocol)"
@@ -133,16 +135,21 @@ train: train-vae train-rnn train-ctrl
 
 # ── Research (paper-scale) ────────────────────────────────────────────────────
 
-RESEARCH_DIR ?= research
+RESEARCH_DIR  ?= research
+SKIP_COLLECT  ?= 0
+SKIP_VAE      ?= 0
+SKIP_RNN      ?= 0
+SKIP_CTRL     ?= 0
+SKIP_EVAL     ?= 0
 
 research: research-random
 
 research-random:
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000 --collection-mode random
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-vae --epochs 1
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-rnn --epochs 20
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64 --n-eval-episodes 16
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) eval --episodes 100
+	[ "$(SKIP_COLLECT)" = "1" ] || $(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000 --collection-mode random
+	[ "$(SKIP_VAE)" = "1" ]     || $(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-vae --epochs 1
+	[ "$(SKIP_RNN)" = "1" ]     || $(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-rnn --epochs 20
+	[ "$(SKIP_CTRL)" = "1" ]     || $(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64 --n-eval-episodes 16
+	[ "$(SKIP_EVAL)" = "1" ]     || $(PYTHON) main.py --base-dir $(RESEARCH_DIR) eval --episodes 100
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel vae_reconstruction --save $(RESEARCH_DIR)/viz_reconstruction.png
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel latent_space       --save $(RESEARCH_DIR)/viz_latent.png
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel training_curves     --save $(RESEARCH_DIR)/viz_curves.png
@@ -150,11 +157,11 @@ research-random:
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel rnn_dream           --save $(RESEARCH_DIR)/viz_dream.gif
 
 research-bias:
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000 --collection-mode biased
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-vae --epochs 1
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-rnn --epochs 20
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64 --n-eval-episodes 16
-	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) eval --episodes 100
+	[ "$(SKIP_COLLECT)" = "1" ] || $(PYTHON) main.py --base-dir $(RESEARCH_DIR) collect --n-rollouts 10000 --collection-mode biased
+	[ "$(SKIP_VAE)" = "1" ]     || $(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-vae --epochs 1
+	[ "$(SKIP_RNN)" = "1" ]     || $(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-rnn --epochs 20
+	[ "$(SKIP_CTRL)" = "1" ]     || $(PYTHON) main.py --base-dir $(RESEARCH_DIR) train-ctrl --generations 1800 --pop-size 64 --n-eval-episodes 16
+	[ "$(SKIP_EVAL)" = "1" ]     || $(PYTHON) main.py --base-dir $(RESEARCH_DIR) eval --episodes 100
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel vae_reconstruction --save $(RESEARCH_DIR)/viz_reconstruction.png
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel latent_space       --save $(RESEARCH_DIR)/viz_latent.png
 	$(PYTHON) main.py --base-dir $(RESEARCH_DIR) viz --panel training_curves     --save $(RESEARCH_DIR)/viz_curves.png
