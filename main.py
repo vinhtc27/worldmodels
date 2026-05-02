@@ -130,7 +130,7 @@ def build_parser():
     p_viz.add_argument("--n-samples",   type=int,   default=8)
     p_viz.add_argument("--rollout-idx", type=int,   default=0)
     p_viz.add_argument("--n-steps",     type=int,   default=200)
-    p_viz.add_argument("--temperature", type=float, default=1.0)
+    p_viz.add_argument("--temperature", type=float, default=0.0)
 
     # ── all ───────────────────────────────────────────────────────────────────
     p_all = sub.add_parser("all", help="Run the full pipeline end-to-end")

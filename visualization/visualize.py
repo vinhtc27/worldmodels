@@ -178,29 +178,37 @@ def latent_space_pca(cfg, n_rollouts: int = 5, save_path: Optional[str] = None):
 
 # ── 3. RNN Dream (hallucination) ──────────────────────────────────────────────
 
-def rnn_dream(cfg, n_steps: int = 200, temperature: float = 1.0,
+def rnn_dream(cfg, n_steps: int = 200, temperature: float = 0.0,
               save_gif: Optional[str] = None):
     """
     Let the world model dream: seed with a real frame, then hallucinate
     future frames using the MDN-RNN and the decoder.
     Controller provides actions so the z trajectory stays near the training
     distribution — random actions cause out-of-distribution drift and broken geometry.
+
+    Temperature guide (interactive slider goes 0.0 → 2.0):
+      0.0  → use_mean=True, fully deterministic, cleanest frames
+      0.25 → low noise, mostly deterministic
+      1.0  → standard sampling
+      >1.0 → creative/chaotic dreams
     """
     device = cfg.get_device()
     vae, rnn, ctrl = _load_all(cfg, device)
 
-    # Seed from a random mid-rollout frame (not always the starting line)
     paths = get_rollout_paths(cfg, "train")
-    d = np.load(paths[np.random.randint(len(paths))])
-    obs = d["obs"]
-    seed_frame = obs[np.random.randint(len(obs))]
-    x0 = torch.from_numpy((seed_frame.astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
+    state = {"seed": None, "frames": None}
 
-    with torch.no_grad():
-        z = vae.get_latent(x0)
+    def pick_seed():
+        d = np.load(paths[np.random.randint(len(paths))])
+        frame = d["obs"][0]
+        with torch.no_grad():
+            z = vae.get_latent(
+                torch.from_numpy((frame.astype(np.float32) / 255.0)
+                                 .transpose(2, 0, 1)).unsqueeze(0).to(device)
+            )
+        return frame, z
 
-    # Pre-generate dream frames
-    def generate_dream(temp):
+    def generate_dream(temp, z):
         frames_dream = []
         z_cur = z.clone()
         h = rnn.initial_state(1, device)
@@ -208,51 +216,57 @@ def rnn_dream(cfg, n_steps: int = 200, temperature: float = 1.0,
             with torch.no_grad():
                 img = vae.decode(z_cur).squeeze(0).cpu().permute(1, 2, 0).numpy().clip(0, 1)
                 frames_dream.append(img)
-                # Controller actions keep z near the training manifold
                 a = ctrl(z_cur, h[0][-1]).detach()
                 log_pi, mu_mix, sigma_mix, h = rnn.forward_step(z_cur, a, h)
-                z_cur = rnn.sample(log_pi, mu_mix, sigma_mix, temperature=temp)
+                use_mean = (temp == 0.0)
+                z_cur = rnn.sample(log_pi, mu_mix, sigma_mix, temperature=max(temp, 1e-6), use_mean=use_mean)
         return frames_dream
 
-    dream_frames = generate_dream(temperature)
+    seed_frame, z = pick_seed()
+    state["seed"]   = seed_frame
+    state["frames"] = generate_dream(temperature, z)
 
     # ── Interactive plot ───────────────────────────────────────────────────────
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-    plt.subplots_adjust(bottom=0.2)
+    plt.subplots_adjust(bottom=0.3)
     fig.suptitle("MDN-RNN Dream  (world model hallucination)", fontsize=11)
 
     axes[0].set_title("Seed frame (real)")
-    axes[0].imshow(seed_frame)
+    im_seed = axes[0].imshow(state["seed"])
     axes[0].axis("off")
 
     axes[1].set_title("Dream frame")
-    im = axes[1].imshow(dream_frames[0])
+    im = axes[1].imshow(state["frames"][0])
     axes[1].axis("off")
 
-    ax_slider = plt.axes([0.15, 0.05, 0.55, 0.03])
-    ax_btn    = plt.axes([0.78, 0.04, 0.1, 0.05])
-    slider    = Slider(ax_slider, "Step", 0, n_steps - 1, valinit=0, valstep=1)
-    btn       = Button(ax_btn, "Regen")
+    ax_step = plt.axes([0.15, 0.12, 0.55, 0.03])
+    ax_temp = plt.axes([0.15, 0.06, 0.55, 0.03])
+    ax_btn  = plt.axes([0.78, 0.08, 0.1, 0.05])
 
-    state = {"frames": dream_frames}
+    slider_step = Slider(ax_step, "Step",  0,    n_steps - 1, valinit=0,   valstep=1)
+    slider_temp = Slider(ax_temp, "Temp",  0.0,  2.0,         valinit=0.0, valstep=0.05)
+    btn         = Button(ax_btn, "Regen")
 
     def update_frame(val):
-        idx = int(slider.val)
+        idx = int(slider_step.val)
         im.set_data(state["frames"][idx])
         fig.canvas.draw()
 
     def regen(event):
-        temp = temperature  # could add a temp slider too
-        state["frames"] = generate_dream(temp)
-        update_frame(slider.val)
+        seed_frame, z = pick_seed()
+        state["seed"]   = seed_frame
+        state["frames"] = generate_dream(slider_temp.val, z)
+        im_seed.set_data(seed_frame)
+        slider_step.set_val(0)
+        update_frame(slider_step.val)
 
-    slider.on_changed(update_frame)
+    slider_step.on_changed(update_frame)
     btn.on_clicked(regen)
 
     if save_gif:
         console.print(f"Saving dream GIF to {save_gif}…")
         writer = PillowWriter(fps=20)
-        anim = FuncAnimation(fig, lambda i: im.set_data(dream_frames[i]),
+        anim = FuncAnimation(fig, lambda i: im.set_data(state["frames"][i]),
                              frames=n_steps, interval=50)
         anim.save(save_gif, writer=writer)
         console.print(f"Saved → {save_gif}")
