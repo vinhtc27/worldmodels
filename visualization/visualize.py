@@ -183,20 +183,17 @@ def rnn_dream(cfg, n_steps: int = 200, temperature: float = 1.0,
     """
     Let the world model dream: seed with a real frame, then hallucinate
     future frames using the MDN-RNN and the decoder.
-    Interactive: slider controls temperature in real-time.
+    Controller provides actions so the z trajectory stays near the training
+    distribution — random actions cause out-of-distribution drift and broken geometry.
     """
     device = cfg.get_device()
-    vae = VAE(cfg.vae).to(device).eval()
-    rnn = MDNRNN(cfg.rnn).to(device).eval()
+    vae, rnn, ctrl = _load_all(cfg, device)
 
-    for path, model in [(cfg.paths.vae_checkpoint, vae), (cfg.paths.rnn_checkpoint, rnn)]:
-        if Path(path).exists():
-            model.load_state_dict(load_checkpoint(path, device)["model"])
-
-    # Seed from a random real frame
+    # Seed from a random mid-rollout frame (not always the starting line)
     paths = get_rollout_paths(cfg, "train")
     d = np.load(paths[np.random.randint(len(paths))])
-    seed_frame = d["obs"][0]
+    obs = d["obs"]
+    seed_frame = obs[np.random.randint(len(obs))]
     x0 = torch.from_numpy((seed_frame.astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
 
     with torch.no_grad():
@@ -211,8 +208,8 @@ def rnn_dream(cfg, n_steps: int = 200, temperature: float = 1.0,
             with torch.no_grad():
                 img = vae.decode(z_cur).squeeze(0).cpu().permute(1, 2, 0).numpy().clip(0, 1)
                 frames_dream.append(img)
-                # Random action
-                a = torch.FloatTensor(1, cfg.rnn.action_dim).uniform_(-1, 1).to(device)
+                # Controller actions keep z near the training manifold
+                a = ctrl(z_cur, h[0][-1]).detach()
                 log_pi, mu_mix, sigma_mix, h = rnn.forward_step(z_cur, a, h)
                 z_cur = rnn.sample(log_pi, mu_mix, sigma_mix, temperature=temp)
         return frames_dream
@@ -400,14 +397,14 @@ def latent_walk(cfg, n_steps: int = 60, save_gif: Optional[str] = None):
     if Path(cfg.paths.vae_checkpoint).exists():
         vae.load_state_dict(load_checkpoint(cfg.paths.vae_checkpoint, device)["model"])
 
-    # Sample two random z vectors from a real rollout
+    # Sample two frames from different rollouts for more visual diversity
     paths = get_rollout_paths(cfg, "train")
-    d = np.load(paths[np.random.randint(len(paths))])
-    obs = d["obs"]
     rng = np.random.default_rng()
-    i1, i2 = rng.choice(len(obs), 2, replace=False)
-    x1 = torch.from_numpy((obs[i1].astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
-    x2 = torch.from_numpy((obs[i2].astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
+    p1, p2 = rng.choice(len(paths), 2, replace=False) if len(paths) >= 2 else (0, 0)
+    obs1 = np.load(paths[p1])["obs"]
+    obs2 = np.load(paths[p2])["obs"]
+    x1 = torch.from_numpy((obs1[rng.integers(len(obs1))].astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
+    x2 = torch.from_numpy((obs2[rng.integers(len(obs2))].astype(np.float32) / 255.0).transpose(2, 0, 1)).unsqueeze(0).to(device)
 
     with torch.no_grad():
         z1 = vae.get_latent(x1)
@@ -440,9 +437,11 @@ def latent_walk(cfg, n_steps: int = 60, save_gif: Optional[str] = None):
     plt.subplots_adjust(bottom=0.2)
     fig.suptitle("Latent Space Walk  (slerp interpolation)", fontsize=11)
 
-    axes[0].imshow(obs[i1]); axes[0].set_title("Start"); axes[0].axis("off")
+    start_img = x1.squeeze(0).cpu().permute(1, 2, 0).numpy()
+    end_img   = x2.squeeze(0).cpu().permute(1, 2, 0).numpy()
+    axes[0].imshow(start_img); axes[0].set_title("Start"); axes[0].axis("off")
     im = axes[1].imshow(frames_walk[0]); axes[1].set_title("Interpolated"); axes[1].axis("off")
-    axes[2].imshow(obs[i2]); axes[2].set_title("End"); axes[2].axis("off")
+    axes[2].imshow(end_img);   axes[2].set_title("End");   axes[2].axis("off")
 
     ax_slider = plt.axes([0.15, 0.05, 0.7, 0.03])
     slider = Slider(ax_slider, "t", 0, n_steps - 1, valinit=0, valstep=1)
